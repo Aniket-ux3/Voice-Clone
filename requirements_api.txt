@@ -5,3 +5,8 @@ torchaudio>=2.0.0
 pydub>=0.25.1
 nltk>=3.8.1
 Werkzeug==3.0.1
+audioseal>=0.2.0
+librosa
+setuptools>=65.5.0
+huggingface_hub>=0.23.0
+git+https://github.com/myshell-ai/MeloTTS.git

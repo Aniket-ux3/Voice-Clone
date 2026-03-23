@@ -1,6 +1,7 @@
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 import torch
+from download_models import download_checkpoints
 import torch.nn.functional as F
 import torchaudio
 import torchaudio.transforms as T
@@ -50,9 +51,18 @@ except ImportError as e:
 # Flask app initialization
 app = Flask(__name__)
 
+# Read allowed origins from env var so the production Vercel URL is accepted.
+# Format: comma-separated list, e.g.
+#   ALLOWED_ORIGINS="https://your-app.vercel.app,http://localhost:8080"
+_raw_origins = os.environ.get(
+    "ALLOWED_ORIGINS",
+    "http://localhost:8080,http://localhost:5173,http://127.0.0.1:8080,http://127.0.0.1:5173",
+)
+ALLOWED_ORIGINS = [o.strip() for o in _raw_origins.split(",") if o.strip()]
+
 CORS(
     app,
-    origins=["http://localhost:8080", "http://localhost:5173", "http://127.0.0.1:8080", "http://127.0.0.1:5173"],
+    origins=ALLOWED_ORIGINS,
     methods=["GET", "POST", "OPTIONS"],
     allow_headers=["Content-Type", "Accept", "Origin", "X-Requested-With"],
     supports_credentials=False,
@@ -356,6 +366,9 @@ def get_emotions():
         {'id': 'anxious', 'label': '😰 Anxious'},
     ])
 
+# --- DOWNLOAD CHECKPOINTS (no-op locally if files exist) ---
+download_checkpoints()
+
 # --- FORCE MODEL PRELOAD AT STARTUP ---
 print("[BOOT] Preloading AI models...")
 load_models()
@@ -365,11 +378,12 @@ if __name__ == '__main__':
     print(f"\n{'='*70}")
     print(f"🚀 Starting Voice Clone API Server")
     print(f"   Device: {device.upper()}")
-    print(f"   URL: http://localhost:5000")
+    PORT = int(os.environ.get("PORT", 7860))
+    print(f"   URL: http://localhost:{PORT}")
     print(f"{'='*70}\n")
     app.run(
         host='0.0.0.0',
-        port=5000,
+        port=PORT,
         debug=False,
         use_reloader=False,
         threaded=True
