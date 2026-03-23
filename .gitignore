@@ -57,10 +57,12 @@ pytest.xml
 *.ipynb
 
 # -----------------------------------------------------------------------------
-# Model Checkpoints (large binary files — stored on Hugging Face Hub instead)
+# Model Checkpoints
+# Only the large converter weights file is excluded (125 MB — stored on HF Hub)
+# Everything else in checkpoints_v2/ is small and fine to commit:
+#   config.json (838 B), base_speakers/ses/*.pth (all ~1.6 KB)
 # -----------------------------------------------------------------------------
-checkpoints_v2/*
-!checkpoints_v2/.gitkeep
+checkpoints_v2/converter/checkpoint.pth
 
 # OpenVoice processed speaker embeddings (auto-generated at runtime)
 processed/*
