@@ -115,6 +115,7 @@ pnpm-debug.log*
 # Vite build output
 frontend/dist/
 frontend/dist-ssr/
+*.lockb
 frontend/bun.lockb
 # Optional: local .eslintcache
 .eslintcache
