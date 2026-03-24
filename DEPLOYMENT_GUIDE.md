@@ -1,4 +1,4 @@
-# Deployment Guide — Synthetic Voice Studio (Free Hosting)
+w# Deployment Guide — Synthetic Voice Studio (Free Hosting)
 
 ## Architecture
 
