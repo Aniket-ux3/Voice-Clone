@@ -13,6 +13,14 @@ RUN apt-get update && apt-get install -y \
     curl \
     build-essential \
     libsndfile1 \
+    pkg-config \
+    libavformat-dev \
+    libavcodec-dev \
+    libavdevice-dev \
+    libavutil-dev \
+    libswscale-dev \
+    libswresample-dev \
+    libavfilter-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # ── Non-root user (required by Hugging Face Spaces) ───────────────────────────
@@ -33,7 +41,10 @@ RUN pip install --user --no-cache-dir -r requirements_api.txt
 RUN pip install --user --no-cache-dir audioseal huggingface_hub
 
 # ── Clone and install OpenVoice V2 ────────────────────────────────────────────
+# Pre-install av (PyAV) from a pre-built wheel to avoid pkg-config issues,
+# then install the rest of OpenVoice normally.
 RUN git clone https://github.com/myshell-ai/OpenVoice.git OpenVoice && \
+    pip install --user --no-cache-dir "av>=10,<11" && \
     pip install --user --no-cache-dir -e OpenVoice
 
 # ── Pre-download NLTK data ────────────────────────────────────────────────────
