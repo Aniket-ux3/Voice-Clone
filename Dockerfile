@@ -41,11 +41,17 @@ RUN pip install --user --no-cache-dir -r requirements_api.txt
 RUN pip install --user --no-cache-dir audioseal huggingface_hub
 
 # ── Clone and install OpenVoice V2 ────────────────────────────────────────────
-# Pre-install av (PyAV) from a pre-built wheel to avoid pkg-config issues,
-# then install the rest of OpenVoice normally.
+# av 10.x has no pre-built wheel and fails to compile with newer Cython.
+# av 13.x ships a proper manylinux wheel — install it first so OpenVoice
+# never tries to build av from source.
 RUN git clone https://github.com/myshell-ai/OpenVoice.git OpenVoice && \
-    pip install --user --no-cache-dir "av>=10,<11" && \
-    pip install --user --no-cache-dir -e OpenVoice
+    pip install --user --no-cache-dir "av>=13,<14" && \
+    pip install --user --no-cache-dir -e OpenVoice --no-deps && \
+    pip install --user --no-cache-dir \
+        faster-whisper==0.9.0 \
+        wavmark==0.0.3 \
+        whisper-timestamped==1.14.2 \
+        onnxruntime
 
 # ── Pre-download NLTK data ────────────────────────────────────────────────────
 RUN python -c "\
