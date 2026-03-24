@@ -46,7 +46,6 @@ nltk.download('punkt_tab', quiet=True)"
 # ── Copy application code ─────────────────────────────────────────────────────
 COPY --chown=user api_server.py .
 COPY --chown=user download_models.py .
-COPY --chown=user emotions/ ./emotions/
 
 # ── Create temp directories ───────────────────────────────────────────────────
 RUN mkdir -p uploads outputs processed
