@@ -50,8 +50,9 @@ RUN git clone https://github.com/myshell-ai/OpenVoice.git OpenVoice && \
     pip install --user --no-cache-dir \
         faster-whisper==0.9.0 \
         wavmark==0.0.3 \
-        whisper-timestamped==1.14.2 \
-        onnxruntime
+        onnxruntime && \
+    pip install --user --no-cache-dir --no-deps \
+        whisper-timestamped==1.14.2
 
 # ── Pre-download NLTK data ────────────────────────────────────────────────────
 RUN python -c "\
