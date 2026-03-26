@@ -13,7 +13,7 @@ export default defineConfig(({ mode }) => ({
       // This eliminates all CORS issues in development — the browser
       // only ever talks to localhost:8080, Vite proxies behind the scenes.
       "/api": {
-        target: "http://localhost:5000",
+        target: "http://localhost:7860",
         changeOrigin: true,
         secure: false,
         // No rewrite needed — Flask routes are already under /api

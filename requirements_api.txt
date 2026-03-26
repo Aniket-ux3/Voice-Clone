@@ -14,3 +14,5 @@ Cython<3.0
 ctranslate2
 onnxruntime
 openai-whisper
+dtw-python
+whisper-timestamped==1.14.2

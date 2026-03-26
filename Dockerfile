@@ -50,11 +50,16 @@ RUN git clone https://github.com/myshell-ai/OpenVoice.git OpenVoice && \
     pip install --user --no-cache-dir \
         onnxruntime \
         ctranslate2 \
-        openai-whisper && \
+        openai-whisper \
+        dtw-python && \
     pip install --user --no-cache-dir --no-deps \
         faster-whisper==0.9.0 \
-        wavmark==0.0.3 \
+        wavmark==0.0.3 && \
+    pip install --user --no-cache-dir \
         whisper-timestamped==1.14.2
+
+# ── Overwrite se_extractor.py with our patched version ───────────────────────
+COPY --chown=user OpenVoice/openvoice/se_extractor.py OpenVoice/openvoice/se_extractor.py
 
 # ── Pre-download NLTK data ────────────────────────────────────────────────────
 RUN python -c "\
