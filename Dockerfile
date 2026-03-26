@@ -49,7 +49,8 @@ RUN git clone https://github.com/myshell-ai/OpenVoice.git OpenVoice && \
     pip install --user --no-cache-dir -e OpenVoice --no-deps && \
     pip install --user --no-cache-dir \
         onnxruntime \
-        ctranslate2 && \
+        ctranslate2 \
+        openai-whisper && \
     pip install --user --no-cache-dir --no-deps \
         faster-whisper==0.9.0 \
         wavmark==0.0.3 \

@@ -13,3 +13,4 @@ git+https://github.com/myshell-ai/MeloTTS.git
 Cython<3.0
 ctranslate2
 onnxruntime
+openai-whisper
