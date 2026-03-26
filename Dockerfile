@@ -59,7 +59,9 @@ RUN git clone https://github.com/myshell-ai/OpenVoice.git OpenVoice && \
         whisper-timestamped==1.14.2
 
 # ── Overwrite se_extractor.py with our patched version ───────────────────────
-COPY --chown=user OpenVoice/openvoice/se_extractor.py OpenVoice/openvoice/se_extractor.py
+# se_extractor_patched.py lives at the repo root (tracked by git) and is
+# copied over the freshly-cloned upstream file inside the container.
+COPY --chown=user se_extractor_patched.py OpenVoice/openvoice/se_extractor.py
 
 # ── Pre-download NLTK data ────────────────────────────────────────────────────
 RUN python -c "\
