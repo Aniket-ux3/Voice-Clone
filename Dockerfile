@@ -63,6 +63,11 @@ RUN git clone https://github.com/myshell-ai/OpenVoice.git OpenVoice && \
 # copied over the freshly-cloned upstream file inside the container.
 COPY --chown=user se_extractor_patched.py OpenVoice/openvoice/se_extractor.py
 
+# ── Download unidic dictionary (required by MeCab / MeloTTS Japanese) ────────
+# unidic ships as an empty package; the actual dictionary must be downloaded
+# separately with `python -m unidic download` before MeCab can initialise.
+RUN python -m unidic download
+
 # ── Pre-download NLTK data ────────────────────────────────────────────────────
 RUN python -c "\
 import nltk; \
