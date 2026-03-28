@@ -56,7 +56,7 @@ app = Flask(__name__)
 #   ALLOWED_ORIGINS="https://your-app.vercel.app,http://localhost:8080"
 _raw_origins = os.environ.get(
     "ALLOWED_ORIGINS",
-    "http://localhost:8080,http://localhost:5173,http://127.0.0.1:8080,http://127.0.0.1:5173",
+    "http://localhost:8080,http://localhost:5173,http://127.0.0.1:8080,http://127.0.0.1:5173,http://localhost:7860",
 )
 ALLOWED_ORIGINS = [o.strip() for o in _raw_origins.split(",") if o.strip()]
 
