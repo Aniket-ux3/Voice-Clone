@@ -167,7 +167,7 @@ temp/
 # -----------------------------------------------------------------------------
 # (Dockerfiles themselves ARE committed — only ignore local overrides)
 docker-compose.override.yml
-.dockerignore
+# NOTE: .dockerignore must NOT be in .gitignore — HF needs it to limit build context
 
 # -----------------------------------------------------------------------------
 # Hugging Face cache (auto-downloaded at runtime)

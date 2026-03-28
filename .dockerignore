@@ -1,0 +1,73 @@
+# =============================================================================
+#  .dockerignore — keep the Docker build context as small as possible.
+#  HuggingFace sends every non-ignored file to the builder before a single
+#  RUN instruction executes. Large files here = hours of "building" with no logs.
+# =============================================================================
+
+# ── Git internals ─────────────────────────────────────────────────────────────
+.git
+.gitignore
+
+# ── Python environments & caches ──────────────────────────────────────────────
+venv/
+.venv/
+env/
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# ── Node / Frontend ───────────────────────────────────────────────────────────
+frontend/
+node_modules/
+
+# ── Large model checkpoints (downloaded at runtime from HF Hub) ───────────────
+checkpoints_v2/
+
+# ── OpenVoice local clone (cloned inside the container via git clone) ─────────
+OpenVoice/
+
+# ── Runtime temp folders ──────────────────────────────────────────────────────
+uploads/
+outputs/
+processed/
+
+# ── Audio / media files ───────────────────────────────────────────────────────
+*.wav
+*.mp3
+*.mp4
+*.ogg
+*.flac
+*.m4a
+*.aac
+
+# ── Logs ──────────────────────────────────────────────────────────────────────
+*.log
+logs/
+
+# ── OS / Editor junk ──────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# ── Secrets ───────────────────────────────────────────────────────────────────
+.env
+.env.*
+
+# ── Dev tooling ───────────────────────────────────────────────────────────────
+.mcp.json
+docker-compose.override.yml
+start.bat
+start.sh
+cleanup.bat
+README.md
+DEPLOYMENT_GUIDE.md
+SETUP_GUIDE.md
+PROJECT_CONTEXT.md
+nginx.conf
