@@ -74,17 +74,16 @@ RUN python -m unidic download
 # source.  In a headless container stdin is closed → EOFError.  We pre-download
 # the model here (with TORCH_HOME set) so the cache exists and the check is
 # skipped entirely at runtime.
-RUN python -c "
-import os, torch
-os.environ['TORCH_HOME'] = '/home/user/.cache/torch'
-torch.hub.set_dir('/home/user/.cache/torch/hub')
-try:
-    torch.hub.load('snakers4/silero-vad', 'silero_vad', source='github', trust_repo=True)
-    print('silero-vad cached OK')
-except Exception as e:
-    print(f'silero-vad pre-cache warning (non-fatal): {e}')
+RUN python -c "\
+import os, torch; \
+os.environ['TORCH_HOME'] = '/home/user/.cache/torch'; \
+torch.hub.set_dir('/home/user/.cache/torch/hub'); \
+try: \
+    torch.hub.load('snakers4/silero-vad', 'silero_vad', source='github', trust_repo=True); \
+    print('silero-vad cached OK'); \
+except Exception as e: \
+    print(f'silero-vad pre-cache warning (non-fatal): {e}') \
 "
-
 # ── Pre-download NLTK data ────────────────────────────────────────────────────
 RUN python -c "\
 import nltk; \
