@@ -209,7 +209,9 @@ def generate_voice():
         # Extract speaker embedding
         print(f"[{request_id}] Extracting speaker embedding...")
         try:
-            target_se, audio_name = se_extractor.get_se(wav_ref, converter, vad=True)
+            # vad=False → tries faster-whisper segmentation first (no interactive
+            # stdin prompts), then auto-falls back to VAD, then whole-file.
+            target_se, audio_name = se_extractor.get_se(wav_ref, converter, vad=False)
             target_se = target_se.to(device)
             norm = torch.norm(target_se)
             if norm > 0:
