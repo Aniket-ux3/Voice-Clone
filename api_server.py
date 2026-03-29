@@ -85,7 +85,7 @@ TARGET_SR = 22050
 def preprocess_audio(input_path, output_path):
     """Convert any audio to 22050 Hz mono WAV."""
     try:
-        waveform, sr = torchaudio.load(input_path)
+        waveform, sr = torchaudio_load(input_path)
         if waveform.shape[0] > 1:
             waveform = torch.mean(waveform, dim=0, keepdim=True)
         if sr != TARGET_SR:
@@ -108,6 +108,37 @@ def preprocess_audio(input_path, output_path):
         except Exception as e2:
             print(f"[preprocess_audio] pydub also failed: {e2}")
             return None
+
+def torchaudio_load(path):
+    """Load a WAV with torchaudio, falling back to soundfile then pydub.
+    Newer torchaudio (>=2.5) requires torchcodec which is not installed;
+    soundfile handles plain WAV files just fine on all platforms."""
+    try:
+        return torchaudio.load(path)
+    except Exception:
+        pass
+    try:
+        import soundfile as sf
+        import numpy as np
+        data, sr = sf.read(path, dtype='float32', always_2d=True)
+        # soundfile returns (samples, channels); torch wants (channels, samples)
+        waveform = torch.from_numpy(data.T)
+        return waveform, sr
+    except Exception:
+        pass
+    # Last resort: pydub → numpy
+    from pydub import AudioSegment
+    import numpy as np
+    audio = AudioSegment.from_file(path)
+    sr = audio.frame_rate
+    samples = np.array(audio.get_array_of_samples(), dtype=np.float32)
+    samples /= 2 ** (8 * audio.sample_width - 1)   # normalise to [-1, 1]
+    if audio.channels > 1:
+        samples = samples.reshape(-1, audio.channels).T
+    else:
+        samples = samples.reshape(1, -1)
+    return torch.from_numpy(samples), sr
+
 
 def apply_light_denoising(waveform):
     """Light smoothing filter."""
@@ -249,7 +280,7 @@ def generate_voice():
         # Denoising
         print(f"[{request_id}] Denoising...")
         try:
-            denoised_waveform, raw_sr = torchaudio.load(raw_output)
+            denoised_waveform, raw_sr = torchaudio_load(raw_output)
             denoised_waveform = apply_light_denoising(denoised_waveform.to(device)).cpu()
             torchaudio.save(raw_output, denoised_waveform, raw_sr)
             print(f"[{request_id}] ✓ Denoised")
@@ -261,7 +292,7 @@ def generate_voice():
         # Watermarking
         print(f"[{request_id}] Embedding watermark...")
         try:
-            wav, sr = torchaudio.load(raw_output)
+            wav, sr = torchaudio_load(raw_output)
             wav = wav.to(device)
             with torch.no_grad():
                 wav_batch = wav.unsqueeze(0)
@@ -331,7 +362,7 @@ def authenticate_voice():
         models = load_models()
         detector = models['detector']
 
-        wav, sr = torchaudio.load(wav_path)
+        wav, sr = torchaudio_load(wav_path)
         if wav.shape[0] > 1:
             wav = torch.mean(wav, dim=0, keepdim=True)
         wav = wav.to(device)
