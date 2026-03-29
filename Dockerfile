@@ -72,18 +72,9 @@ RUN python -m unidic download
 # ── Pre-trust and cache silero-vad so runtime never gets an interactive prompt ──
 # torch.hub prompts "do you trust this repo?" when it first sees an unknown
 # source.  In a headless container stdin is closed → EOFError.  We pre-download
-# the model here (with TORCH_HOME set) so the cache exists and the check is
-# skipped entirely at runtime.
-RUN python -c "\
-import os, torch; \
-os.environ['TORCH_HOME'] = '/home/user/.cache/torch'; \
-torch.hub.set_dir('/home/user/.cache/torch/hub'); \
-try: \
-    torch.hub.load('snakers4/silero-vad', 'silero_vad', source='github', trust_repo=True); \
-    print('silero-vad cached OK'); \
-except Exception as e: \
-    print(f'silero-vad pre-cache warning (non-fatal): {e}') \
-"
+# the model here so the cache exists and the check is skipped at runtime.
+COPY --chown=user cache_silero.py .
+RUN python cache_silero.py
 # ── Pre-download NLTK data ────────────────────────────────────────────────────
 RUN python -c "\
 import nltk; \
