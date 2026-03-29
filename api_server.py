@@ -178,6 +178,11 @@ def load_models():
             raise RuntimeError("Model loading failed")
     return _models_cache
 
+@app.route('/', methods=['GET'])
+def root():
+    """Root route — satisfies HuggingFace Spaces health check."""
+    return jsonify({'status': 'healthy', 'service': 'Voice Clone API', 'device': device})
+
 @app.route('/api/<path:path>', methods=['OPTIONS'])
 def handle_preflight(path):
     return '', 204
