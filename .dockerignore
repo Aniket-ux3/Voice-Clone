@@ -37,6 +37,9 @@ uploads/
 outputs/
 processed/
 
+# ── Emotions audio samples ────────────────────────────────────────────────────
+emotions/
+
 # ── Audio / media files ───────────────────────────────────────────────────────
 *.wav
 *.mp3
