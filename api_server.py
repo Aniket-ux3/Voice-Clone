@@ -94,7 +94,7 @@ def preprocess_audio(input_path, output_path):
         peak = torch.max(torch.abs(waveform))
         if peak > 0:
             waveform = waveform / peak
-        torchaudio.save(output_path, waveform, TARGET_SR)
+        torchaudio_save(output_path, waveform, TARGET_SR)
         return output_path
     except Exception as e:
         print(f"[preprocess_audio] torchaudio failed: {e}")
@@ -110,20 +110,17 @@ def preprocess_audio(input_path, output_path):
             return None
 
 def torchaudio_load(path):
-    """Load a WAV with torchaudio, falling back to soundfile then pydub.
-    Newer torchaudio (>=2.5) requires torchcodec which is not installed;
-    soundfile handles plain WAV files just fine on all platforms."""
-    try:
-        return torchaudio.load(path)
-    except Exception:
-        pass
+    """Load a WAV — torchaudio 2.11 requires torchcodec; fall back to soundfile."""
     try:
         import soundfile as sf
         import numpy as np
         data, sr = sf.read(path, dtype='float32', always_2d=True)
-        # soundfile returns (samples, channels); torch wants (channels, samples)
-        waveform = torch.from_numpy(data.T)
+        waveform = torch.from_numpy(data.T)  # (channels, samples)
         return waveform, sr
+    except Exception:
+        pass
+    try:
+        return torchaudio.load(path)
     except Exception:
         pass
     # Last resort: pydub → numpy
@@ -132,12 +129,41 @@ def torchaudio_load(path):
     audio = AudioSegment.from_file(path)
     sr = audio.frame_rate
     samples = np.array(audio.get_array_of_samples(), dtype=np.float32)
-    samples /= 2 ** (8 * audio.sample_width - 1)   # normalise to [-1, 1]
+    samples /= 2 ** (8 * audio.sample_width - 1)
     if audio.channels > 1:
         samples = samples.reshape(-1, audio.channels).T
     else:
         samples = samples.reshape(1, -1)
     return torch.from_numpy(samples), sr
+
+
+def torchaudio_save(path, waveform, sr):
+    """Save a WAV — torchaudio 2.11 requires torchcodec; fall back to soundfile."""
+    try:
+        import soundfile as sf
+        import numpy as np
+        # waveform: (channels, samples) float32 tensor
+        data = waveform.numpy().T  # soundfile wants (samples, channels)
+        sf.write(path, data, sr, subtype='PCM_16')
+        return
+    except Exception:
+        pass
+    try:
+        torchaudio.save(path, waveform, sr)
+        return
+    except Exception:
+        pass
+    # Last resort: pydub
+    from pydub import AudioSegment
+    import numpy as np
+    data = (waveform.numpy().T * 32767).astype(np.int16)
+    audio = AudioSegment(
+        data.tobytes(),
+        frame_rate=sr,
+        sample_width=2,
+        channels=waveform.shape[0],
+    )
+    audio.export(path, format='wav')
 
 
 def apply_light_denoising(waveform):
@@ -180,8 +206,10 @@ def load_models():
 
 @app.route('/', methods=['GET'])
 def root():
-    """Root route — satisfies HuggingFace Spaces health check."""
-    return jsonify({'status': 'healthy', 'service': 'Voice Clone API', 'device': device})
+    """Root route — returns HTML so HuggingFace Spaces iframe shows Running."""
+    return f'''<!DOCTYPE html><html><head><title>Voice Clone API</title></head>
+<body><h2>Voice Clone API ✅</h2><p>Device: {device.upper()}</p>
+<p>Status: Running | <a href="/api/health">/api/health</a></p></body></html>''', 200, {{'Content-Type': 'text/html'}}
 
 @app.route('/api/<path:path>', methods=['OPTIONS'])
 def handle_preflight(path):
@@ -287,7 +315,7 @@ def generate_voice():
         try:
             denoised_waveform, raw_sr = torchaudio_load(raw_output)
             denoised_waveform = apply_light_denoising(denoised_waveform.to(device)).cpu()
-            torchaudio.save(raw_output, denoised_waveform, raw_sr)
+            torchaudio_save(raw_output, denoised_waveform, raw_sr)
             print(f"[{request_id}] ✓ Denoised")
         except Exception as e:
             print(f"[{request_id}] ERROR in denoising: {e}")
@@ -304,7 +332,7 @@ def generate_voice():
                 wm = watermarker.get_watermark(wav_batch, sr)
                 final_audio = wav + wm.squeeze(0)
             final_path = os.path.join(app.config['OUTPUT_FOLDER'], f"{request_id}_final.wav")
-            torchaudio.save(final_path, final_audio.cpu(), sr)
+            torchaudio_save(final_path, final_audio.cpu(), sr)
             print(f"[{request_id}] ✓ Watermark embedded")
         except Exception as e:
             print(f"[{request_id}] ERROR in watermarking: {e}")
