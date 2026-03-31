@@ -1,12 +1,13 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
   Mic, Shield, Sparkles, Trash2, Zap, Fingerprint, Waves, Brain,
-  ChevronRight,
+  ChevronRight, Cpu, X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import VoiceGeneration from "@/components/VoiceGeneration";
 import VoiceAuthentication from "@/components/VoiceAuthentication";
 import { useVoiceStudio } from "@/hooks/useVoiceStudio";
+import { voiceAPI } from "@/services/api";
 
 type TabType = "generation" | "authentication";
 
@@ -32,10 +33,57 @@ const SessionBadge = () => (
   </span>
 );
 
+// ── CPU notice banner ─────────────────────────────────────────────────────────
+// Shown when the health check reports device === "cpu".
+// Users learn upfront that generation will be slow — no surprise freezes.
+const CpuNoticeBanner = ({ onDismiss }: { onDismiss: () => void }) => (
+  <div className="relative flex items-start gap-3 px-5 py-3.5 rounded-xl bg-amber-500/8 border border-amber-500/25 animate-fade-in-up mb-4">
+    <Cpu className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+    <div className="flex-1 min-w-0">
+      <p className="text-xs font-semibold text-amber-300 mb-0.5">
+        Running on CPU — expect slower generation
+      </p>
+      <p className="text-xs text-muted-foreground leading-relaxed">
+        This Space is using CPU inference (no GPU available). Voice generation typically takes{" "}
+        <span className="text-foreground/70 font-medium">1–3 minutes</span>. Authentication is faster (~20–40 s).
+        Please don't close or refresh the tab while processing.
+      </p>
+    </div>
+    <button
+      onClick={onDismiss}
+      aria-label="Dismiss CPU notice"
+      className="shrink-0 p-0.5 rounded text-muted-foreground/50 hover:text-muted-foreground transition-colors"
+    >
+      <X className="w-3.5 h-3.5" />
+    </button>
+  </div>
+);
+
 // ── Main page ────────────────────────────────────────────────────────────────
 const Index = () => {
   const [activeTab, setActiveTab] = useState<TabType>("generation");
   const { clearAll } = useVoiceStudio();
+
+  // CPU detection state
+  const [isCpu, setIsCpu]               = useState(false);
+  const [cpuBannerVisible, setCpuBannerVisible] = useState(false);
+
+  // Poll /api/health once on mount to detect CPU vs GPU
+  useEffect(() => {
+    let cancelled = false;
+    voiceAPI.healthCheck()
+      .then((health) => {
+        if (cancelled) return;
+        if (health.device === "cpu") {
+          setIsCpu(true);
+          setCpuBannerVisible(true);
+        }
+      })
+      .catch(() => {
+        // Health check failed silently — don't block the UI
+      });
+    return () => { cancelled = true; };
+  }, []);
 
   return (
     <div className="min-h-screen bg-background relative overflow-hidden">
@@ -92,6 +140,13 @@ const Index = () => {
           </div>
           {/* Right controls */}
           <div className="flex items-center gap-3">
+            {/* Chip showing CPU mode when detected */}
+            {isCpu && (
+              <span className="hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border border-amber-500/30 bg-amber-500/10 text-amber-400">
+                <Cpu className="w-3 h-3" />
+                CPU Mode
+              </span>
+            )}
             <SessionBadge />
             <Button
               variant="ghost"
@@ -104,6 +159,11 @@ const Index = () => {
             </Button>
           </div>
         </div>
+
+        {/* ── CPU notice banner (dismissible) ──────────────────────────────── */}
+        {cpuBannerVisible && (
+          <CpuNoticeBanner onDismiss={() => setCpuBannerVisible(false)} />
+        )}
 
         {/* ── Hero ─────────────────────────────────────────────────────────── */}
         <header

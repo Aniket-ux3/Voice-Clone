@@ -1,7 +1,7 @@
 import { useRef, useState } from "react";
 import {
   RotateCcw, Shield, Search, CheckCircle2, AlertTriangle,
-  Loader2, Fingerprint, Waves,
+  Loader2, Fingerprint, Waves, AlertCircle, Cpu,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
@@ -20,15 +20,26 @@ const ANALYSIS_STAGES = [
   "Determining authenticity...",
 ];
 
+// Shown when analysis takes longer than expected (CPU fallback)
+const LONG_WAIT_MESSAGES = [
+  "Still analyzing — CPU inference takes a bit longer. Hang tight!",
+  "Scanning watermark patterns — almost done.",
+  "Processing on CPU — this is normal for free-tier deployments.",
+];
+
+const LONG_WAIT_THRESHOLD_MS = 20_000; // 20 s before showing the nudge
+
 // ── Scanning animation shown during analysis ──────────────────────────────────
 const ScanningOverlay = ({
   stage,
   stageIndex,
   total,
+  longWaitMessage,
 }: {
   stage: string;
   stageIndex: number;
   total: number;
+  longWaitMessage?: string;
 }) => (
   <div className="flex flex-col items-center justify-center py-12 animate-fade-in-up">
     {/* Shield with scanning line */}
@@ -72,6 +83,16 @@ const ScanningOverlay = ({
         />
       ))}
     </div>
+
+    {/* Long-wait nudge — appears after LONG_WAIT_THRESHOLD_MS */}
+    {longWaitMessage && (
+      <div className="mt-6 px-4 py-3 rounded-xl bg-primary/8 border border-primary/20 max-w-xs animate-fade-in-up">
+        <div className="flex items-start gap-2">
+          <Cpu className="w-3.5 h-3.5 text-primary/80 shrink-0 mt-0.5" />
+          <p className="text-xs text-primary/90 leading-relaxed">{longWaitMessage}</p>
+        </div>
+      </div>
+    )}
   </div>
 );
 
@@ -110,11 +131,16 @@ const VoiceAuthentication = () => {
   const { authentication, setAuthentication, resetAuthentication } = useVoiceStudio();
   const { toast } = useToast();
 
-  const [audioFile, setAudioFile]     = useState<File | null>(null);
-  const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [stageIndex, setStageIndex]   = useState(0);
+  const [audioFile, setAudioFile]       = useState<File | null>(null);
+  const [isAnalyzing, setIsAnalyzing]   = useState(false);
+  const [stageIndex, setStageIndex]     = useState(0);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [longWaitMsgIdx, setLongWaitMsgIdx] = useState<number | null>(null);
+
   const currentObjectUrlRef = useRef<string | null>(null);
   const stageTimerRef       = useRef<ReturnType<typeof setInterval> | null>(null);
+  const longWaitTimerRef    = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const longWaitCycleRef    = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // ── Handlers ────────────────────────────────────────────────────────────────
 
@@ -124,6 +150,7 @@ const VoiceAuthentication = () => {
       currentObjectUrlRef.current = null;
     }
     setAudioFile(file);
+    setErrorMessage(null);
     if (file) {
       const url = URL.createObjectURL(file);
       currentObjectUrlRef.current = url;
@@ -137,6 +164,8 @@ const VoiceAuthentication = () => {
     if (!audioFile) return;
     setIsAnalyzing(true);
     setStageIndex(0);
+    setErrorMessage(null);
+    setLongWaitMsgIdx(null);
     setAuthentication({ result: null });
 
     // Cycle through stage labels
@@ -145,6 +174,16 @@ const VoiceAuthentication = () => {
         prev < ANALYSIS_STAGES.length - 1 ? prev + 1 : prev,
       );
     }, 2000);
+
+    // After threshold, show CPU patience message and cycle every 12 s
+    longWaitTimerRef.current = setTimeout(() => {
+      setLongWaitMsgIdx(0);
+      longWaitCycleRef.current = setInterval(() => {
+        setLongWaitMsgIdx((prev) =>
+          prev === null ? 0 : (prev + 1) % LONG_WAIT_MESSAGES.length,
+        );
+      }, 12_000);
+    }, LONG_WAIT_THRESHOLD_MS);
 
     try {
       const response = await voiceAPI.authenticateVoice(audioFile);
@@ -158,15 +197,21 @@ const VoiceAuthentication = () => {
           : "Voice appears to be AI-generated",
       });
     } catch (error) {
+      const msg =
+        error instanceof Error ? error.message : "Something went wrong. Please try again.";
+      setErrorMessage(msg);
       toast({
         title: "Analysis Failed",
-        description: error instanceof Error ? error.message : "An error occurred",
+        description: msg,
         variant: "destructive",
       });
     } finally {
-      if (stageTimerRef.current) clearInterval(stageTimerRef.current);
+      if (stageTimerRef.current)    clearInterval(stageTimerRef.current);
+      if (longWaitTimerRef.current) clearTimeout(longWaitTimerRef.current);
+      if (longWaitCycleRef.current) clearInterval(longWaitCycleRef.current);
       setIsAnalyzing(false);
       setStageIndex(0);
+      setLongWaitMsgIdx(null);
     }
   };
 
@@ -176,6 +221,7 @@ const VoiceAuthentication = () => {
       currentObjectUrlRef.current = null;
     }
     setAudioFile(null);
+    setErrorMessage(null);
     resetAuthentication();
   };
 
@@ -251,6 +297,17 @@ const VoiceAuthentication = () => {
               <Search className="w-4 h-4 mr-2" />
               Analyze Voice
             </Button>
+
+            {/* Error banner — clean user-facing message, never raw server crash */}
+            {errorMessage && (
+              <div className="flex items-start gap-2.5 p-3 rounded-xl bg-destructive/8 border border-destructive/20 animate-fade-in-up">
+                <AlertCircle className="w-4 h-4 text-destructive shrink-0 mt-0.5" />
+                <div>
+                  <p className="text-xs font-semibold text-destructive mb-0.5">Analysis failed</p>
+                  <p className="text-xs text-muted-foreground leading-relaxed">{errorMessage}</p>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -260,6 +317,7 @@ const VoiceAuthentication = () => {
             stage={ANALYSIS_STAGES[stageIndex]}
             stageIndex={stageIndex}
             total={ANALYSIS_STAGES.length}
+            longWaitMessage={longWaitMsgIdx !== null ? LONG_WAIT_MESSAGES[longWaitMsgIdx] : undefined}
           />
         )}
 

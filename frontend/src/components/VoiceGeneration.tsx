@@ -22,6 +22,17 @@ const PROCESSING_STAGES = [
   "Finalizing output...",
 ];
 
+// Shown when generation takes longer than expected (>30 s on CPU)
+const LONG_WAIT_MESSAGES = [
+  "Still working — CPU inference takes 1–2 minutes. Hang tight!",
+  "Almost there — complex scripts take a little longer to synthesize.",
+  "Processing on CPU — this is normal. Your voice is being crafted.",
+  "Taking a bit longer than usual — please don't close this tab.",
+];
+
+// How long (ms) before we show the "taking longer" nudge
+const LONG_WAIT_THRESHOLD_MS = 30_000;
+
 // ── Step config ───────────────────────────────────────────────────────────────
 const STEPS = [
   { id: 1, label: "Voice Sample", icon: Upload },
@@ -86,10 +97,12 @@ const ProcessingOverlay = ({
   stage,
   stageIndex,
   total,
+  longWaitMessage,
 }: {
   stage: string;
   stageIndex: number;
   total: number;
+  longWaitMessage?: string;
 }) => (
   <div className="flex flex-col items-center justify-center py-16 animate-fade-in-up">
     {/* Spinning conic ring */}
@@ -134,6 +147,13 @@ const ProcessingOverlay = ({
         />
       ))}
     </div>
+
+    {/* Long-wait nudge — appears after 30 s of processing */}
+    {longWaitMessage && (
+      <div className="mt-6 px-4 py-3 rounded-xl bg-primary/8 border border-primary/20 max-w-xs animate-fade-in-up">
+        <p className="text-xs text-primary/90 leading-relaxed text-center">{longWaitMessage}</p>
+      </div>
+    )}
   </div>
 );
 
@@ -184,11 +204,15 @@ const VoiceGeneration = () => {
   const { generation, setGeneration, resetGeneration } = useVoiceStudio();
   const { toast } = useToast();
 
-  const [audioFile, setAudioFile]     = useState<File | null>(null);
-  const [isProcessing, setIsProcessing] = useState(false);
+  const [audioFile, setAudioFile]       = useState<File | null>(null);
+  const [isProcessing, setIsProcessing]   = useState(false);
   const [processingStageIdx, setProcessingStageIdx] = useState(0);
-  const currentObjectUrlRef = useRef<string | null>(null);
-  const stageTimerRef       = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [longWaitMsgIdx, setLongWaitMsgIdx] = useState<number | null>(null);
+  const [errorMessage, setErrorMessage]   = useState<string | null>(null);
+  const currentObjectUrlRef  = useRef<string | null>(null);
+  const stageTimerRef        = useRef<ReturnType<typeof setInterval> | null>(null);
+  const longWaitTimerRef     = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const longWaitCycleRef     = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Derive the current workflow step (1-4) for the stepper
   const currentStep = (() => {
@@ -213,21 +237,36 @@ const VoiceGeneration = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Cycle through stage labels during processing
+  // Cycle through stage labels + long-wait nudge
   useEffect(() => {
     if (isProcessing) {
       setProcessingStageIdx(0);
+      setLongWaitMsgIdx(null);
       stageTimerRef.current = setInterval(() => {
         setProcessingStageIdx((prev) =>
           prev < PROCESSING_STAGES.length - 1 ? prev + 1 : prev,
         );
       }, 2200);
+      // After 30 s, show patience message and cycle every 15 s
+      longWaitTimerRef.current = setTimeout(() => {
+        setLongWaitMsgIdx(0);
+        longWaitCycleRef.current = setInterval(() => {
+          setLongWaitMsgIdx((prev) =>
+            prev === null ? 0 : (prev + 1) % LONG_WAIT_MESSAGES.length,
+          );
+        }, 15_000);
+      }, LONG_WAIT_THRESHOLD_MS);
     } else {
-      if (stageTimerRef.current) clearInterval(stageTimerRef.current);
+      if (stageTimerRef.current)    clearInterval(stageTimerRef.current);
+      if (longWaitTimerRef.current) clearTimeout(longWaitTimerRef.current);
+      if (longWaitCycleRef.current) clearInterval(longWaitCycleRef.current);
       setProcessingStageIdx(0);
+      setLongWaitMsgIdx(null);
     }
     return () => {
-      if (stageTimerRef.current) clearInterval(stageTimerRef.current);
+      if (stageTimerRef.current)    clearInterval(stageTimerRef.current);
+      if (longWaitTimerRef.current) clearTimeout(longWaitTimerRef.current);
+      if (longWaitCycleRef.current) clearInterval(longWaitCycleRef.current);
     };
   }, [isProcessing]);
 
@@ -251,6 +290,7 @@ const VoiceGeneration = () => {
   const handleGenerate = async () => {
     if (!audioFile || !generation.text.trim()) return;
     setIsProcessing(true);
+    setErrorMessage(null);
     setGeneration({ generatedAudioUrl: null, audioId: null });
     try {
       const response = await voiceAPI.generateVoice({
@@ -262,11 +302,9 @@ const VoiceGeneration = () => {
       setGeneration({ audioId: response.audio_id, generatedAudioUrl: downloadUrl });
       toast({ title: "Voice generated!", description: "Your voice clone is ready." });
     } catch (error) {
-      toast({
-        title: "Generation Failed",
-        description: error instanceof Error ? error.message : "An error occurred",
-        variant: "destructive",
-      });
+      const msg = error instanceof Error ? error.message : "Something went wrong. Please try again.";
+      setErrorMessage(msg);
+      toast({ title: "Generation Failed", description: msg, variant: "destructive" });
     } finally {
       setIsProcessing(false);
     }
@@ -291,6 +329,7 @@ const VoiceGeneration = () => {
   const handleReset = () => {
     if (currentObjectUrlRef.current) { URL.revokeObjectURL(currentObjectUrlRef.current); currentObjectUrlRef.current = null; }
     setAudioFile(null);
+    setErrorMessage(null);
     resetGeneration();
   };
 
@@ -419,6 +458,16 @@ const VoiceGeneration = () => {
               <RotateCcw className="w-3.5 h-3.5 mr-1.5" />
               Reset Generation
             </Button>
+            {/* Error banner — only shown when not processing, never shows raw server errors */}
+            {errorMessage && !isProcessing && (
+              <div className="flex items-start gap-2.5 p-3 rounded-xl bg-destructive/8 border border-destructive/20 animate-fade-in-up">
+                <AlertCircle className="w-4 h-4 text-destructive shrink-0 mt-0.5" />
+                <div>
+                  <p className="text-xs font-semibold text-destructive mb-0.5">Generation failed</p>
+                  <p className="text-xs text-muted-foreground leading-relaxed">{errorMessage}</p>
+                </div>
+              </div>
+            )}
           </div>
         </div>
 
@@ -441,6 +490,7 @@ const VoiceGeneration = () => {
                 stage={PROCESSING_STAGES[processingStageIdx]}
                 stageIndex={processingStageIdx}
                 total={PROCESSING_STAGES.length}
+                longWaitMessage={longWaitMsgIdx !== null ? LONG_WAIT_MESSAGES[longWaitMsgIdx] : undefined}
               />
             ) : generation.generatedAudioUrl ? (
               <div className="w-full space-y-5 animate-scale-in">

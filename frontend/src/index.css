@@ -44,6 +44,13 @@
     --gradient-start: 270 80% 60%;  /* Primary Purple */
     --gradient-mid: 200 80% 50%;    /* Secondary Blue */
     --gradient-end: 320 80% 60%;    /* Accent Pink */
+
+    /* CPU / warning amber tones (used by CpuNoticeBanner) */
+    --cpu-bg: 38 92% 50% / 0.08;       /* amber-500 @ 8% opacity  */
+    --cpu-border: 38 92% 50% / 0.25;   /* amber-500 @ 25% opacity */
+    --cpu-text: 38 92% 70%;            /* amber-300               */
+    --cpu-chip: 38 92% 50% / 0.10;     /* amber-500 @ 10% opacity */
+    --cpu-chip-border: 38 92% 50% / 0.30;
   }
 }
 
@@ -196,6 +203,39 @@
       hsl(200 80% 50%),
       hsl(320 80% 60%)
     );
+  }
+
+  /* ── CPU notice banner ─────────────────────────────────────────────────────
+   * Explicit class for the CpuNoticeBanner component so the amber tones are
+   * guaranteed to render correctly regardless of Tailwind's JIT purge settings.
+   * The component also uses Tailwind utilities as a fallback.
+   * ──────────────────────────────────────────────────────────────────────── */
+  .cpu-banner {
+    background: hsl(var(--cpu-bg));
+    border: 1px solid hsl(var(--cpu-border));
+    border-radius: var(--radius);
+  }
+
+  .cpu-banner-text {
+    color: hsl(var(--cpu-text));
+  }
+
+  .cpu-chip {
+    background: hsl(var(--cpu-chip));
+    border: 1px solid hsl(var(--cpu-chip-border));
+    color: hsl(var(--cpu-text));
+    border-radius: 9999px;
+  }
+
+  /* ── Error inline banner ───────────────────────────────────────────────────
+   * Shared style for the inline error banners in VoiceGeneration and
+   * VoiceAuthentication — the destructive/8 Tailwind shorthand may not emit
+   * correctly in all Tailwind versions.
+   * ──────────────────────────────────────────────────────────────────────── */
+  .error-banner {
+    background: hsl(0 84% 60% / 0.08);
+    border: 1px solid hsl(0 84% 60% / 0.20);
+    border-radius: var(--radius);
   }
 }
 

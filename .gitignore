@@ -33,6 +33,9 @@ env/
 ENV/
 .venv/
 .env_backup/
+.mcp.json
+.env
+*.env
 
 # Type checking
 .mypy_cache/
