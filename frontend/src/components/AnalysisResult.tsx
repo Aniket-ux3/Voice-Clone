@@ -7,108 +7,90 @@ interface AnalysisResultProps {
 }
 
 const AnalysisResult = ({ isOriginal, confidence }: AnalysisResultProps) => {
-  const [displayedConfidence, setDisplayedConfidence] = useState(0);
+  const [displayed, setDisplayed] = useState(0);
   const [showResult, setShowResult] = useState(false);
 
   useEffect(() => {
-    // Animate the confidence counter
-    const duration = 1500;
+    setDisplayed(0);
+    setShowResult(false);
     const steps = 60;
     const increment = confidence / steps;
     let current = 0;
-
     const timer = setInterval(() => {
       current += increment;
       if (current >= confidence) {
-        setDisplayedConfidence(confidence);
+        setDisplayed(confidence);
         clearInterval(timer);
         setTimeout(() => setShowResult(true), 300);
       } else {
-        setDisplayedConfidence(Math.floor(current));
+        setDisplayed(Math.floor(current));
       }
-    }, duration / steps);
-
+    }, 1500 / steps);
     return () => clearInterval(timer);
   }, [confidence]);
 
+  // SVG gauge — radius adapts for mobile via viewBox scaling
+  const R = 80;
+  const cx = 96;
+  const cy = 96;
+  const circumference = 2 * Math.PI * R;
+  const dashOffset = circumference * (1 - displayed / 100);
+
   return (
     <div className="animate-fade-in-up">
-      {/* Circular gauge */}
-      <div className="flex flex-col items-center mb-8">
-        <div className="relative w-48 h-48">
-          {/* Background circle */}
-          <svg className="w-full h-full -rotate-90">
+
+      {/* Circular gauge — responsive via max-w */}
+      <div className="flex flex-col items-center mb-5 sm:mb-8">
+        <div className="relative w-36 h-36 sm:w-48 sm:h-48">
+          <svg viewBox="0 0 192 192" className="w-full h-full -rotate-90">
+            {/* Track */}
+            <circle cx={cx} cy={cy} r={R} fill="none" stroke="hsl(var(--muted))" strokeWidth="10" />
+            {/* Progress */}
             <circle
-              cx="96"
-              cy="96"
-              r="88"
+              cx={cx} cy={cy} r={R}
               fill="none"
-              stroke="hsl(var(--muted))"
-              strokeWidth="12"
-            />
-            {/* Progress circle */}
-            <circle
-              cx="96"
-              cy="96"
-              r="88"
-              fill="none"
-              stroke={isOriginal ? "url(#successGradient)" : "url(#warningGradient)"}
-              strokeWidth="12"
+              stroke={isOriginal ? "url(#successGrad)" : "url(#warningGrad)"}
+              strokeWidth="10"
               strokeLinecap="round"
-              strokeDasharray={2 * Math.PI * 88}
-              strokeDashoffset={2 * Math.PI * 88 * (1 - displayedConfidence / 100)}
-              className="transition-all duration-300"
+              strokeDasharray={circumference}
+              strokeDashoffset={dashOffset}
+              className="transition-all duration-200"
             />
             <defs>
-              <linearGradient id="successGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+              <linearGradient id="successGrad" x1="0%" y1="0%" x2="100%" y2="0%">
                 <stop offset="0%" stopColor="hsl(var(--success))" />
                 <stop offset="100%" stopColor="hsl(180, 80%, 50%)" />
               </linearGradient>
-              <linearGradient id="warningGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+              <linearGradient id="warningGrad" x1="0%" y1="0%" x2="100%" y2="0%">
                 <stop offset="0%" stopColor="hsl(var(--warning))" />
                 <stop offset="100%" stopColor="hsl(var(--accent))" />
               </linearGradient>
             </defs>
           </svg>
-
-          {/* Center content */}
+          {/* Center text */}
           <div className="absolute inset-0 flex flex-col items-center justify-center">
-            <span className="text-4xl font-bold gradient-text">
-              {displayedConfidence}%
-            </span>
-            <span className="text-muted-foreground text-sm mt-1">Confidence</span>
+            <span className="text-3xl sm:text-4xl font-bold gradient-text leading-none">{displayed}%</span>
+            <span className="text-muted-foreground text-xs sm:text-sm mt-1">Confidence</span>
           </div>
         </div>
       </div>
 
       {/* Result badge */}
       {showResult && (
-        <div
-          className={`flex items-center justify-center gap-3 p-4 rounded-2xl animate-scale-in ${
-            isOriginal
-              ? "bg-success/10 border border-success/30 glow-success"
-              : "bg-warning/10 border border-warning/30 glow-warning"
-          }`}
-        >
-          <div
-            className={`w-12 h-12 rounded-full flex items-center justify-center ${
-              isOriginal ? "bg-success/20" : "bg-warning/20"
-            }`}
-          >
-            {isOriginal ? (
-              <Check className="w-6 h-6 text-success" />
-            ) : (
-              <AlertTriangle className="w-6 h-6 text-warning" />
-            )}
+        <div className={`flex items-center gap-3 p-3 sm:p-4 rounded-2xl animate-scale-in ${
+          isOriginal ? "bg-success/10 border border-success/30 glow-success" : "bg-warning/10 border border-warning/30 glow-warning"
+        }`}>
+          <div className={`w-10 h-10 sm:w-12 sm:h-12 rounded-full flex items-center justify-center shrink-0 ${isOriginal ? "bg-success/20" : "bg-warning/20"}`}>
+            {isOriginal
+              ? <Check className="w-5 h-5 sm:w-6 sm:h-6 text-success" />
+              : <AlertTriangle className="w-5 h-5 sm:w-6 sm:h-6 text-warning" />}
           </div>
-          <div>
-            <p className={`font-semibold text-lg ${isOriginal ? "text-success" : "text-warning"}`}>
+          <div className="min-w-0">
+            <p className={`font-semibold text-sm sm:text-base leading-tight ${isOriginal ? "text-success" : "text-warning"}`}>
               {isOriginal ? "Original Voice Detected" : "Synthetic Voice Detected"}
             </p>
-            <p className="text-muted-foreground text-sm">
-              {isOriginal
-                ? "This audio appears to be an authentic human voice"
-                : "This audio shows signs of synthetic generation"}
+            <p className="text-muted-foreground text-xs mt-0.5 leading-relaxed">
+              {isOriginal ? "Appears to be an authentic human recording" : "Shows signs of AI generation"}
             </p>
           </div>
         </div>
@@ -116,30 +98,22 @@ const AnalysisResult = ({ isOriginal, confidence }: AnalysisResultProps) => {
 
       {/* Details panel */}
       {showResult && (
-        <div className="mt-6 glass-card p-5 animate-fade-in-up" style={{ animationDelay: "0.2s" }}>
-          <h4 className="text-sm font-medium text-foreground mb-4 flex items-center gap-2">
-            <Shield className="w-4 h-4 text-primary" />
+        <div className="mt-4 sm:mt-6 glass-card p-4 sm:p-5 animate-fade-in-up" style={{ animationDelay: "0.2s" }}>
+          <h4 className="text-xs sm:text-sm font-medium text-foreground mb-3 flex items-center gap-2">
+            <Shield className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-primary" />
             Analysis Details
           </h4>
-          
-          <div className="space-y-3">
-            <div className="flex items-center justify-between">
-              <span className="text-muted-foreground text-sm">Confidence Level</span>
-              <span className="flex items-center gap-1 text-sm font-medium">
-                <Percent className="w-3.5 h-3.5 text-primary" />
-                {confidence}%
-              </span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-muted-foreground text-sm">Watermark Status</span>
-              <span className={`text-sm font-medium ${isOriginal ? "text-success" : "text-warning"}`}>
-                {isOriginal ? "No synthetic markers" : "Synthetic markers found"}
-              </span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-muted-foreground text-sm">Analysis Type</span>
-              <span className="text-sm font-medium text-foreground">Deep Voice Analysis</span>
-            </div>
+          <div className="space-y-2.5">
+            {[
+              { label: "Confidence Level", value: <span className="flex items-center gap-1 font-medium text-xs sm:text-sm"><Percent className="w-3 h-3 text-primary" />{confidence}%</span> },
+              { label: "Watermark Status", value: <span className={`font-medium text-xs sm:text-sm ${isOriginal ? "text-success" : "text-warning"}`}>{isOriginal ? "No markers" : "Markers found"}</span> },
+              { label: "Analysis Type", value: <span className="font-medium text-foreground text-xs sm:text-sm">AudioSeal Detection</span> },
+            ].map(({ label, value }) => (
+              <div key={label} className="flex items-center justify-between gap-2">
+                <span className="text-muted-foreground text-xs sm:text-sm">{label}</span>
+                {value}
+              </div>
+            ))}
           </div>
         </div>
       )}

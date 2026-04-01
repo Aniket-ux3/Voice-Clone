@@ -2,78 +2,40 @@
 #  Synthetic Voice Studio — .gitignore
 # =============================================================================
 
-# -----------------------------------------------------------------------------
-# Python
-# -----------------------------------------------------------------------------
+# ── Python ────────────────────────────────────────────────────────────────────
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
-.Python
 *.egg
 *.egg-info/
-.installed.cfg
-MANIFEST
 dist/
 build/
-develop-eggs/
-downloads/
-eggs/
-.eggs/
-!lib/
-!lib64/
-parts/
-sdist/
-var/
-wheels/
-
-# Virtual environments
 venv/
 env/
 ENV/
 .venv/
-.env_backup/
-.mcp.json
-.env
-*.env
 
-# Type checking
+# ── Type checking / testing ───────────────────────────────────────────────────
 .mypy_cache/
-.dmypy.json
-dmypy.json
-.pytype/
-.pyre/
-
-# Testing
 .pytest_cache/
 .tox/
 htmlcov/
 .coverage
 .coverage.*
-coverage.xml
-*.cover
-nosetests.xml
-pytest.xml
 
-# Jupyter
-.ipynb_checkpoints
-*.ipynb
-
-# -----------------------------------------------------------------------------
-# Model Checkpoints
-# Only the large converter weights file is excluded (125 MB — stored on HF Hub)
-# Everything else in checkpoints_v2/ is small and fine to commit:
-#   config.json (838 B), base_speakers/ses/*.pth (all ~1.6 KB)
-# -----------------------------------------------------------------------------
+# ── Model weights (large — stored on HF Hub, downloaded at runtime) ───────────
 checkpoints_v2/converter/checkpoint.pth
 
-# OpenVoice processed speaker embeddings (auto-generated at runtime)
+# ── Runtime temp files (auto-generated, never commit) ────────────────────────
 processed/*
 !processed/.gitkeep
+uploads/*
+!uploads/.gitkeep
+outputs/*
+!outputs/.gitkeep
 
-# -----------------------------------------------------------------------------
-# Audio files (runtime temp files — never commit)
-# -----------------------------------------------------------------------------
+# ── Audio files ───────────────────────────────────────────────────────────────
 *.wav
 *.mp3
 *.mp4
@@ -84,17 +46,7 @@ processed/*
 *.aiff
 *.wma
 
-# -----------------------------------------------------------------------------
-# Upload / Output folders (runtime temp — kept empty in git via .gitkeep)
-# -----------------------------------------------------------------------------
-uploads/*
-!uploads/.gitkeep
-outputs/*
-!outputs/.gitkeep
-
-# -----------------------------------------------------------------------------
-# Environment variables (contain secrets — never commit)
-# -----------------------------------------------------------------------------
+# ── Environment variables ─────────────────────────────────────────────────────
 .env
 .env.local
 .env.development
@@ -104,81 +56,53 @@ frontend/.env
 frontend/.env.local
 frontend/.env.production
 
-# -----------------------------------------------------------------------------
-# Node / Frontend
-# -----------------------------------------------------------------------------
+# ── Node / Frontend ───────────────────────────────────────────────────────────
 node_modules/
 frontend/node_modules/
+frontend/dist/
+frontend/dist-ssr/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
-pnpm-debug.log*
-.pnp/
-.pnp.js
-# Vite build output
-frontend/dist/
-frontend/dist-ssr/
-*.lockb
-frontend/bun.lockb
-# Optional: local .eslintcache
 .eslintcache
 
-# -----------------------------------------------------------------------------
-# Logs
-# -----------------------------------------------------------------------------
+# ── Logs ──────────────────────────────────────────────────────────────────────
 *.log
 logs/
-*.log.*
 
-# -----------------------------------------------------------------------------
-# OS generated
-# -----------------------------------------------------------------------------
+# ── OS generated ──────────────────────────────────────────────────────────────
 .DS_Store
 .DS_Store?
 ._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
 Thumbs.db
 desktop.ini
 
-# -----------------------------------------------------------------------------
-# IDEs & Editors
-# -----------------------------------------------------------------------------
+# ── IDEs & Editors ────────────────────────────────────────────────────────────
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
-*.suo
-*.user
-*.userosscache
-*.sln.docstates
 .vs/
 
-# -----------------------------------------------------------------------------
-# Temporary files
-# -----------------------------------------------------------------------------
+# ── Temp / backup / trash files ──────────────────────────────────────────────
 tmp/
 temp/
 *.tmp
 *.bak
 *.orig
+.trash_*
 
-# -----------------------------------------------------------------------------
-# Docker
-# -----------------------------------------------------------------------------
-# (Dockerfiles themselves ARE committed — only ignore local overrides)
+# ── Dev tooling (not needed in repo) ─────────────────────────────────────────
+.mcp.json
+.agent/
+.packageignore
 docker-compose.override.yml
-# NOTE: .dockerignore must NOT be in .gitignore — HF needs it to limit build context
 
-# -----------------------------------------------------------------------------
-# Hugging Face cache (auto-downloaded at runtime)
-# -----------------------------------------------------------------------------
+# ── HF cache (auto-downloaded) ───────────────────────────────────────────────
 .cache/
 huggingface/
 
-# -----------------------------------------------------------------------------
-# MCP / Dev tooling
-# -----------------------------------------------------------------------------
-.mcp.json
+# ── Python pycache in OpenVoice subdir ───────────────────────────────────────
+OpenVoice/**/__pycache__/
+OpenVoice/**/*.pyc

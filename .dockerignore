@@ -1,14 +1,13 @@
 # =============================================================================
-#  .dockerignore — keep the Docker build context as small as possible.
-#  HuggingFace sends every non-ignored file to the builder before a single
-#  RUN instruction executes. Large files here = hours of "building" with no logs.
+#  .dockerignore — minimize Docker build context sent to HF Spaces builder.
+#  Large files here = slow "building" phase with no visible progress.
 # =============================================================================
 
-# ── Git internals ─────────────────────────────────────────────────────────────
+# Git
 .git
 .gitignore
 
-# ── Python environments & caches ──────────────────────────────────────────────
+# Python environments & caches
 venv/
 .venv/
 env/
@@ -18,29 +17,26 @@ __pycache__/
 *.pyd
 *.so
 *.egg-info/
-.eggs/
-dist/
-build/
 
-# ── Node / Frontend ───────────────────────────────────────────────────────────
+# Node / Frontend (built separately, served via Vercel)
 frontend/
 node_modules/
 
-# ── Large model checkpoints (downloaded at runtime from HF Hub) ───────────────
+# Large model checkpoints (downloaded at runtime from HF Hub)
 checkpoints_v2/
 
-# ── OpenVoice local clone (cloned inside the container via git clone) ─────────
+# OpenVoice (cloned inside container via Dockerfile)
 OpenVoice/
 
-# ── Runtime temp folders ──────────────────────────────────────────────────────
+# Runtime temp folders
 uploads/
 outputs/
 processed/
 
-# ── Emotions audio samples ────────────────────────────────────────────────────
+# Emotion audio samples
 emotions/
 
-# ── Audio / media files ───────────────────────────────────────────────────────
+# Audio / media
 *.wav
 *.mp3
 *.mp4
@@ -49,31 +45,27 @@ emotions/
 *.m4a
 *.aac
 
-# ── Logs ──────────────────────────────────────────────────────────────────────
+# Logs
 *.log
 logs/
 
-# ── OS / Editor junk ──────────────────────────────────────────────────────────
+# OS / Editor
 .DS_Store
 Thumbs.db
 .vscode/
 .idea/
 
-# ── Secrets ───────────────────────────────────────────────────────────────────
+# Secrets
 .env
 .env.*
 .mcp.json
-.env
-*.env
 
-# ── Dev tooling ───────────────────────────────────────────────────────────────
+# Dev tooling / docs
 .mcp.json
+.agent/
+.packageignore
 docker-compose.override.yml
-start.bat
-start.sh
 cleanup.bat
-README.md
 DEPLOYMENT_GUIDE.md
 SETUP_GUIDE.md
 PROJECT_CONTEXT.md
-nginx.conf

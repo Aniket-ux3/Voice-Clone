@@ -6,7 +6,6 @@
 
 @layer base {
   :root {
-    /* ORIGINAL SYNTHETIC VOICE STUDIO PALETTE */
     --background: 230 25% 8%;
     --foreground: 210 40% 98%;
 
@@ -40,135 +39,104 @@
 
     --radius: 0.75rem;
 
-    /* Gradient stops for original palette */
-    --gradient-start: 270 80% 60%;  /* Primary Purple */
-    --gradient-mid: 200 80% 50%;    /* Secondary Blue */
-    --gradient-end: 320 80% 60%;    /* Accent Pink */
-
-    /* CPU / warning amber tones (used by CpuNoticeBanner) */
-    --cpu-bg: 38 92% 50% / 0.08;       /* amber-500 @ 8% opacity  */
-    --cpu-border: 38 92% 50% / 0.25;   /* amber-500 @ 25% opacity */
-    --cpu-text: 38 92% 70%;            /* amber-300               */
-    --cpu-chip: 38 92% 50% / 0.10;     /* amber-500 @ 10% opacity */
-    --cpu-chip-border: 38 92% 50% / 0.30;
+    --gradient-start: 270 80% 60%;
+    --gradient-mid: 200 80% 50%;
+    --gradient-end: 320 80% 60%;
   }
 }
 
 @layer base {
-  * {
-    @apply border-border;
-  }
+  * { @apply border-border; }
 
-  /* ORIGINAL BACKGROUND STYLE */
+  html { -webkit-text-size-adjust: 100%; }
+
   body {
     @apply text-foreground font-sans antialiased;
     font-family: 'Inter', sans-serif;
-    background: 
+    /* Prevent horizontal overflow on mobile */
+    overflow-x: hidden;
+    background:
       radial-gradient(circle at 20% 20%, hsl(270 80% 60% / 0.15), transparent 40%),
       radial-gradient(circle at 80% 30%, hsl(200 80% 50% / 0.15), transparent 40%),
       radial-gradient(circle at 50% 80%, hsl(320 80% 60% / 0.10), transparent 40%),
       hsl(var(--background));
     min-height: 100vh;
   }
+
+  /* Better tap targets on mobile */
+  button, [role="button"] { touch-action: manipulation; }
+
+  /* Prevent layout shift from scrollbar */
+  html { scrollbar-gutter: stable; }
 }
 
 @layer components {
-  /* ORIGINAL GLASS CARD STYLE */
   .glass-card {
     background: rgba(30, 30, 60, 0.6);
     backdrop-filter: blur(18px);
     -webkit-backdrop-filter: blur(18px);
     border: 1px solid rgba(168, 85, 247, 0.25);
     border-radius: var(--radius);
-    box-shadow: 
+    box-shadow:
       0 8px 32px rgba(0, 0, 0, 0.35),
-      0 0 25px rgba(168, 85, 247, 0.25);
+      0 0 25px rgba(168, 85, 247, 0.20);
   }
 
-  /* ORIGINAL GRADIENT TEXT */
   .gradient-text {
-    background: linear-gradient(
-      135deg,
-      hsl(270 80% 60%),
-      hsl(200 80% 50%),
-      hsl(320 80% 60%)
-    );
+    background: linear-gradient(135deg, hsl(270 80% 60%), hsl(200 80% 50%), hsl(320 80% 60%));
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     background-clip: text;
   }
 
-  /* PRIMARY GRADIENT BACKGROUND */
   .gradient-bg {
-    background: linear-gradient(
-      135deg,
-      hsl(270 80% 60%),
-      hsl(200 80% 50%)
-    );
+    background: linear-gradient(135deg, hsl(270 80% 60%), hsl(200 80% 50%));
   }
-
-  /* Hover state for primary buttons */
   .gradient-bg:hover {
     box-shadow: 0 0 20px hsl(270 80% 60% / 0.4);
   }
 
-  /* Gradient border animation */
   .gradient-border {
     position: relative;
     background: rgba(30, 30, 60, 0.6);
     border-radius: var(--radius);
     backdrop-filter: blur(18px);
   }
-
   .gradient-border::before {
     content: '';
     position: absolute;
     inset: -2px;
     border-radius: calc(var(--radius) + 2px);
-    background: linear-gradient(
-      135deg,
-      hsl(270 80% 60%),
-      hsl(200 80% 50%),
-      hsl(320 80% 60%)
-    );
+    background: linear-gradient(135deg, hsl(270 80% 60%), hsl(200 80% 50%), hsl(320 80% 60%));
     background-size: 300% 300%;
     animation: gradient-shift 4s ease infinite;
     z-index: -1;
     opacity: 0.5;
   }
+  .gradient-border:hover::before { opacity: 0.8; }
 
-  .gradient-border:hover::before {
-    opacity: 0.8;
-  }
-
-  /* GLOW EFFECTS */
   .glow {
-    box-shadow: 
+    box-shadow:
       0 0 20px hsl(270 80% 60% / 0.35),
       0 0 40px hsl(270 80% 60% / 0.15);
   }
-
-  /* Success glow - Original voice */
   .glow-success {
-    box-shadow: 
+    box-shadow:
       0 0 20px hsl(145 80% 45% / 0.4),
       0 0 40px hsl(145 80% 45% / 0.2);
   }
-
-  /* Warning glow - Synthetic voice */
   .glow-warning {
-    box-shadow: 
+    box-shadow:
       0 0 20px hsl(40 90% 50% / 0.4),
       0 0 40px hsl(40 90% 50% / 0.2);
   }
 
-  /* Upload zone styles */
+  /* Upload zone — responsive min-height */
   .upload-zone {
-    @apply border-2 border-dashed rounded-2xl p-8 transition-all duration-300;
+    @apply border-2 border-dashed rounded-2xl p-5 sm:p-8 transition-all duration-300;
     border-color: rgba(168, 85, 247, 0.25);
     background: rgba(30, 30, 60, 0.5);
   }
-
   .upload-zone:hover,
   .upload-zone.drag-over {
     border-color: rgba(168, 85, 247, 0.5);
@@ -176,62 +144,27 @@
     box-shadow: 0 0 20px rgba(168, 85, 247, 0.15);
   }
 
-  /* Emotion pill styles */
   .emotion-pill {
-    @apply px-4 py-2 rounded-full border transition-all duration-300 cursor-pointer;
+    @apply px-3 py-1.5 sm:px-4 sm:py-2 rounded-full border transition-all duration-300 cursor-pointer text-xs sm:text-sm;
     background: rgba(30, 30, 60, 0.6);
     border-color: rgba(168, 85, 247, 0.2);
   }
-
   .emotion-pill:hover {
     border-color: rgba(168, 85, 247, 0.5);
     background: rgba(168, 85, 247, 0.12);
   }
-
   .emotion-pill.selected {
     border-color: hsl(270 80% 60%);
     background: rgba(168, 85, 247, 0.2);
-    box-shadow: 0 0 20px rgba(168, 85, 247, 0.25);
+    box-shadow: 0 0 16px rgba(168, 85, 247, 0.25);
   }
 
-  /* Waveform bars animation */
   .waveform-bar {
     @apply w-1 rounded-full;
-    background: linear-gradient(
-      to top,
-      hsl(270 80% 60%),
-      hsl(200 80% 50%),
-      hsl(320 80% 60%)
-    );
+    background: linear-gradient(to top, hsl(270 80% 60%), hsl(200 80% 50%), hsl(320 80% 60%));
   }
 
-  /* ── CPU notice banner ─────────────────────────────────────────────────────
-   * Explicit class for the CpuNoticeBanner component so the amber tones are
-   * guaranteed to render correctly regardless of Tailwind's JIT purge settings.
-   * The component also uses Tailwind utilities as a fallback.
-   * ──────────────────────────────────────────────────────────────────────── */
-  .cpu-banner {
-    background: hsl(var(--cpu-bg));
-    border: 1px solid hsl(var(--cpu-border));
-    border-radius: var(--radius);
-  }
-
-  .cpu-banner-text {
-    color: hsl(var(--cpu-text));
-  }
-
-  .cpu-chip {
-    background: hsl(var(--cpu-chip));
-    border: 1px solid hsl(var(--cpu-chip-border));
-    color: hsl(var(--cpu-text));
-    border-radius: 9999px;
-  }
-
-  /* ── Error inline banner ───────────────────────────────────────────────────
-   * Shared style for the inline error banners in VoiceGeneration and
-   * VoiceAuthentication — the destructive/8 Tailwind shorthand may not emit
-   * correctly in all Tailwind versions.
-   * ──────────────────────────────────────────────────────────────────────── */
+  /* Error banner */
   .error-banner {
     background: hsl(0 84% 60% / 0.08);
     border: 1px solid hsl(0 84% 60% / 0.20);
@@ -240,124 +173,57 @@
 }
 
 @layer utilities {
-  /* Gradient shift animation */
+  /* Hide scrollbar but keep scrolling (stepper on small screens) */
+  .hide-scrollbar {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  .hide-scrollbar::-webkit-scrollbar { display: none; }
+
   @keyframes gradient-shift {
-    0%, 100% {
-      background-position: 0% 50%;
-    }
-    50% {
-      background-position: 100% 50%;
-    }
+    0%, 100% { background-position: 0% 50%; }
+    50% { background-position: 100% 50%; }
   }
 
-  /* Pulse glow animation */
   @keyframes pulse-glow {
     0%, 100% {
-      box-shadow: 
-        0 0 20px hsl(270 80% 60% / 0.35),
-        0 0 40px hsl(270 80% 60% / 0.15);
+      box-shadow: 0 0 20px hsl(270 80% 60% / 0.35), 0 0 40px hsl(270 80% 60% / 0.15);
     }
     50% {
-      box-shadow: 
-        0 0 30px hsl(270 80% 60% / 0.5),
-        0 0 60px hsl(270 80% 60% / 0.25);
+      box-shadow: 0 0 30px hsl(270 80% 60% / 0.5), 0 0 60px hsl(270 80% 60% / 0.25);
     }
   }
 
-  /* Scanning line animation */
-  @keyframes scan {
-    0% {
-      transform: translateX(-100%);
-    }
-    100% {
-      transform: translateX(100%);
-    }
-  }
-
-  /* Waveform animation */
   @keyframes wave {
-    0%, 100% {
-      transform: scaleY(0.3);
-    }
-    50% {
-      transform: scaleY(1);
-    }
+    0%, 100% { transform: scaleY(0.3); }
+    50% { transform: scaleY(1); }
   }
 
-  /* Float animation */
   @keyframes float {
-    0%, 100% {
-      transform: translateY(0);
-    }
-    50% {
-      transform: translateY(-10px);
-    }
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-8px); }
   }
 
-  /* Rotate animation */
   @keyframes spin-slow {
-    from {
-      transform: rotate(0deg);
-    }
-    to {
-      transform: rotate(360deg);
-    }
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
   }
 
-  /* Fade in up */
   @keyframes fade-in-up {
-    from {
-      opacity: 0;
-      transform: translateY(20px);
-    }
-    to {
-      opacity: 1;
-      transform: translateY(0);
-    }
+    from { opacity: 0; transform: translateY(16px); }
+    to { opacity: 1; transform: translateY(0); }
   }
 
-  /* Scale in */
   @keyframes scale-in {
-    from {
-      opacity: 0;
-      transform: scale(0.9);
-    }
-    to {
-      opacity: 1;
-      transform: scale(1);
-    }
+    from { opacity: 0; transform: scale(0.92); }
+    to { opacity: 1; transform: scale(1); }
   }
 
-  .animate-gradient-shift {
-    animation: gradient-shift 4s ease infinite;
-    background-size: 300% 300%;
-  }
-
-  .animate-pulse-glow {
-    animation: pulse-glow 2s ease-in-out infinite;
-  }
-
-  .animate-scan {
-    animation: scan 2s ease-in-out infinite;
-  }
-
-  .animate-wave {
-    animation: wave 1s ease-in-out infinite;
-  }
-
-  .animate-float {
-    animation: float 3s ease-in-out infinite;
-  }
-
-  .animate-spin-slow {
-    animation: spin-slow 8s linear infinite;
-  }
-
-  .animate-fade-in-up {
-    animation: fade-in-up 0.5s ease-out forwards;
-  }
-
-  .animate-scale-in {
-    animation: scale-in 0.3s ease-out forwards;
-  }
+  .animate-gradient-shift { animation: gradient-shift 4s ease infinite; background-size: 300% 300%; }
+  .animate-pulse-glow     { animation: pulse-glow 2s ease-in-out infinite; }
+  .animate-wave           { animation: wave 1s ease-in-out infinite; }
+  .animate-float          { animation: float 3s ease-in-out infinite; }
+  .animate-spin-slow      { animation: spin-slow 8s linear infinite; }
+  .animate-fade-in-up     { animation: fade-in-up 0.45s ease-out forwards; }
+  .animate-scale-in       { animation: scale-in 0.3s ease-out forwards; }
 }

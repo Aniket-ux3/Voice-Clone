@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useMemo } from "react";
+import { useState, useRef, useCallback } from "react";
 import { Upload, Music, Play, Pause, X, Check, AlertCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
@@ -9,9 +9,8 @@ interface AudioUploaderProps {
   inputId?: string;
 }
 
-// Accepted MIME types and extensions
 const ACCEPTED_TYPES = ["audio/wav", "audio/mpeg", "audio/mp4", "audio/x-m4a", "audio/ogg", "audio/webm", "audio/flac"];
-const MAX_SIZE_BYTES = 50 * 1024 * 1024; // 50 MB
+const MAX_SIZE_BYTES = 50 * 1024 * 1024;
 
 function isAcceptedAudio(file: File): boolean {
   return (
@@ -21,18 +20,13 @@ function isAcceptedAudio(file: File): boolean {
   );
 }
 
-// Pre-generate stable waveform bar heights so they don't re-render on every
-// React reconciliation pass (Math.random() inside JSX rerenders = jitter).
+// Deterministic waveform heights — never re-randomised on render
 function makeBarHeights(count: number): number[] {
-  const out: number[] = [];
-  for (let i = 0; i < count; i++) {
-    // Pseudo-random but deterministic per-index via sine hash
-    out.push(20 + Math.abs(Math.sin(i * 2.4 + 1.3) * 70 + Math.sin(i * 0.7) * 30));
-  }
-  return out;
+  return Array.from({ length: count }, (_, i) =>
+    20 + Math.abs(Math.sin(i * 2.4 + 1.3) * 70 + Math.sin(i * 0.7) * 30)
+  );
 }
-
-const WAVEFORM_HEIGHTS = makeBarHeights(40);
+const WAVEFORM_HEIGHTS = makeBarHeights(32); // fewer bars on mobile looks cleaner
 
 const AudioUploader = ({
   onFileSelect,
@@ -40,72 +34,44 @@ const AudioUploader = ({
   label = "Upload Audio Sample",
   inputId = "audio-upload",
 }: AudioUploaderProps) => {
-  const [isDragOver, setIsDragOver]   = useState(false);
-  const [isPlaying, setIsPlaying]     = useState(false);
-  const [fileError, setFileError]     = useState<string | null>(null);
-  // Internal object URL owned by this component (separate from parent's copy)
-  const audioUrlRef  = useRef<string | null>(null);
-  const audioRef     = useRef<HTMLAudioElement | null>(null);
-  const inputRef     = useRef<HTMLInputElement>(null);
+  const [isDragOver, setIsDragOver] = useState(false);
+  const [isPlaying, setIsPlaying]   = useState(false);
+  const [fileError, setFileError]   = useState<string | null>(null);
+  const audioUrlRef = useRef<string | null>(null);
+  const audioRef    = useRef<HTMLAudioElement | null>(null);
+  const inputRef    = useRef<HTMLInputElement>(null);
 
   const revokeUrl = () => {
-    if (audioUrlRef.current) {
-      URL.revokeObjectURL(audioUrlRef.current);
-      audioUrlRef.current = null;
-    }
+    if (audioUrlRef.current) { URL.revokeObjectURL(audioUrlRef.current); audioUrlRef.current = null; }
   };
 
-  const handleDragOver = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragOver(true);
-  }, []);
+  const handleDragOver  = useCallback((e: React.DragEvent) => { e.preventDefault(); setIsDragOver(true); }, []);
+  const handleDragLeave = useCallback((e: React.DragEvent) => { e.preventDefault(); setIsDragOver(false); }, []);
+  const handleDrop      = useCallback((e: React.DragEvent) => {
+    e.preventDefault(); setIsDragOver(false);
+    const f = e.dataTransfer.files[0];
+    if (f) processFile(f);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const handleDragLeave = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragOver(false);
-  }, []);
-
-  const handleDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragOver(false);
-    const droppedFile = e.dataTransfer.files[0];
-    if (droppedFile) processFile(droppedFile);
-  }, []);  // eslint-disable-line react-hooks/exhaustive-deps
-
-  const processFile = (selectedFile: File) => {
+  const processFile = (f: File) => {
     setFileError(null);
-
-    if (!isAcceptedAudio(selectedFile)) {
-      setFileError("Unsupported format. Please upload a WAV, MP3, M4A, FLAC, or OGG file.");
-      return;
-    }
-    if (selectedFile.size > MAX_SIZE_BYTES) {
-      setFileError("File is too large. Maximum size is 50 MB.");
-      return;
-    }
-
+    if (!isAcceptedAudio(f)) { setFileError("Unsupported format. Please upload WAV, MP3, M4A, FLAC, or OGG."); return; }
+    if (f.size > MAX_SIZE_BYTES) { setFileError("File too large — maximum is 50 MB."); return; }
     revokeUrl();
-    const url = URL.createObjectURL(selectedFile);
-    audioUrlRef.current = url;
+    audioUrlRef.current = URL.createObjectURL(f);
     setIsPlaying(false);
-    onFileSelect(selectedFile);
+    onFileSelect(f);
   };
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const selectedFile = e.target.files?.[0];
-    if (selectedFile) processFile(selectedFile);
-    // Reset so the same file can be re-selected after removal
+    const f = e.target.files?.[0];
+    if (f) processFile(f);
     e.target.value = "";
   };
 
   const handleRemove = () => {
-    revokeUrl();
-    setIsPlaying(false);
-    setFileError(null);
-    if (audioRef.current) {
-      audioRef.current.pause();
-      audioRef.current.src = "";
-    }
+    revokeUrl(); setIsPlaying(false); setFileError(null);
+    if (audioRef.current) { audioRef.current.pause(); audioRef.current.src = ""; }
     if (inputRef.current) inputRef.current.value = "";
     onFileSelect(null);
   };
@@ -113,22 +79,9 @@ const AudioUploader = ({
   const togglePlayback = () => {
     const audio = audioRef.current;
     if (!audio || !audioUrlRef.current) return;
-
-    // Lazily assign src so the browser doesn't start fetching until play
-    if (!audio.src || audio.src !== audioUrlRef.current) {
-      audio.src = audioUrlRef.current;
-    }
-
-    if (isPlaying) {
-      audio.pause();
-      setIsPlaying(false);
-    } else {
-      audio.play().catch(() => {
-        // Autoplay blocked or decode error — fail silently, reset state
-        setIsPlaying(false);
-      });
-      setIsPlaying(true);
-    }
+    if (!audio.src || audio.src !== audioUrlRef.current) audio.src = audioUrlRef.current;
+    if (isPlaying) { audio.pause(); setIsPlaying(false); }
+    else { audio.play().catch(() => setIsPlaying(false)); setIsPlaying(true); }
   };
 
   const handleAudioEnded = () => setIsPlaying(false);
@@ -141,14 +94,7 @@ const AudioUploader = ({
 
   return (
     <div className="w-full">
-      <input
-        ref={inputRef}
-        type="file"
-        accept="audio/*"
-        onChange={handleInputChange}
-        className="hidden"
-        id={inputId}
-      />
+      <input ref={inputRef} type="file" accept="audio/*" onChange={handleInputChange} className="hidden" id={inputId} />
 
       {!file ? (
         <>
@@ -157,35 +103,24 @@ const AudioUploader = ({
             onDragOver={handleDragOver}
             onDragLeave={handleDragLeave}
             onDrop={handleDrop}
-            className={`upload-zone flex flex-col items-center justify-center cursor-pointer min-h-[180px] ${
-              isDragOver ? "drag-over" : ""
-            } ${fileError ? "border-destructive/50" : ""}`}
+            className={`upload-zone flex flex-col items-center justify-center cursor-pointer min-h-[140px] sm:min-h-[170px] ${isDragOver ? "drag-over" : ""} ${fileError ? "!border-destructive/50" : ""}`}
           >
-            <div className="relative mb-4">
-              <div className={`w-16 h-16 rounded-full flex items-center justify-center transition-colors ${
-                fileError
-                  ? "bg-destructive/15 border border-destructive/30"
-                  : "bg-gradient-to-br from-primary/20 to-secondary/20"
+            <div className="relative mb-3">
+              <div className={`w-12 h-12 sm:w-14 sm:h-14 rounded-full flex items-center justify-center transition-colors ${
+                fileError ? "bg-destructive/15 border border-destructive/30" : "bg-gradient-to-br from-primary/20 to-secondary/20"
               }`}>
                 {fileError
-                  ? <AlertCircle className="w-8 h-8 text-destructive" />
-                  : <Upload className="w-8 h-8 text-primary" />
+                  ? <AlertCircle className="w-6 h-6 sm:w-7 sm:h-7 text-destructive" />
+                  : <Upload className="w-6 h-6 sm:w-7 sm:h-7 text-primary" />
                 }
               </div>
-              {isDragOver && (
-                <div className="absolute inset-0 rounded-full animate-ping bg-primary/20" />
-              )}
+              {isDragOver && <div className="absolute inset-0 rounded-full animate-ping bg-primary/20" />}
             </div>
-            <p className="text-foreground font-medium mb-1">{label}</p>
-            <p className="text-muted-foreground text-sm">
-              Drag & drop or click to browse
-            </p>
-            <p className="text-muted-foreground/60 text-xs mt-2">
-              WAV · MP3 · M4A · FLAC · OGG — max 50 MB
-            </p>
+            <p className="text-foreground font-medium text-sm mb-0.5">{label}</p>
+            <p className="text-muted-foreground text-xs">Tap to browse · or drag &amp; drop</p>
+            <p className="text-muted-foreground/50 text-[10px] mt-1.5">WAV · MP3 · M4A · FLAC — max 50 MB</p>
           </label>
 
-          {/* File validation error — shown below the drop zone, never a raw crash */}
           {fileError && (
             <div className="flex items-start gap-2 mt-2 px-3 py-2 rounded-lg bg-destructive/8 border border-destructive/20 animate-fade-in-up">
               <AlertCircle className="w-3.5 h-3.5 text-destructive shrink-0 mt-0.5" />
@@ -194,72 +129,49 @@ const AudioUploader = ({
           )}
         </>
       ) : (
-        <div className="glass-card p-5 animate-scale-in">
-          <div className="flex items-center gap-4">
-            <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-primary/30 to-secondary/30 flex items-center justify-center shrink-0">
-              <Music className="w-6 h-6 text-primary" />
+        <div className="glass-card p-4 animate-scale-in">
+          {/* File info row */}
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 sm:w-11 sm:h-11 rounded-xl bg-gradient-to-br from-primary/30 to-secondary/30 flex items-center justify-center shrink-0">
+              <Music className="w-5 h-5 text-primary" />
             </div>
-
             <div className="flex-1 min-w-0">
-              <p className="text-foreground font-medium truncate">{file.name}</p>
-              <p className="text-muted-foreground text-sm">{formatFileSize(file.size)}</p>
+              <p className="text-foreground font-medium text-xs sm:text-sm truncate">{file.name}</p>
+              <p className="text-muted-foreground text-xs">{formatFileSize(file.size)}</p>
             </div>
-
-            <div className="flex items-center gap-2">
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={togglePlayback}
-                aria-label={isPlaying ? "Pause preview" : "Play preview"}
-                className="h-10 w-10 rounded-full bg-primary/20 hover:bg-primary/30"
-              >
-                {isPlaying ? (
-                  <Pause className="w-5 h-5 text-primary" />
-                ) : (
-                  <Play className="w-5 h-5 text-primary ml-0.5" />
-                )}
+            {/* Controls — always reachable */}
+            <div className="flex items-center gap-1.5 shrink-0">
+              <Button variant="ghost" size="icon" onClick={togglePlayback}
+                aria-label={isPlaying ? "Pause" : "Play"}
+                className="h-9 w-9 rounded-full bg-primary/20 hover:bg-primary/30">
+                {isPlaying
+                  ? <Pause className="w-4 h-4 text-primary" />
+                  : <Play  className="w-4 h-4 text-primary ml-0.5" />}
               </Button>
-
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={handleRemove}
+              <Button variant="ghost" size="icon" onClick={handleRemove}
                 aria-label="Remove file"
-                className="h-10 w-10 rounded-full hover:bg-destructive/20"
-              >
-                <X className="w-5 h-5 text-muted-foreground hover:text-destructive" />
+                className="h-9 w-9 rounded-full hover:bg-destructive/20">
+                <X className="w-4 h-4 text-muted-foreground" />
               </Button>
             </div>
           </div>
 
-          {/* Waveform visualisation — stable heights, no per-render randomness */}
-          <div className="mt-4 flex items-center justify-center gap-1 h-12">
+          {/* Waveform — height reduced on mobile */}
+          <div className="mt-3 flex items-center justify-center gap-0.5 h-8 sm:h-10">
             {WAVEFORM_HEIGHTS.map((h, i) => (
-              <div
-                key={i}
-                className={`w-1 rounded-full waveform-bar transition-all duration-150 ${
-                  isPlaying ? "animate-wave" : ""
-                }`}
-                style={{
-                  height: `${h}%`,
-                  animationDelay: `${i * 0.05}s`,
-                  opacity: isPlaying ? 1 : 0.4,
-                }}
+              <div key={i}
+                className={`w-1 rounded-full waveform-bar transition-all duration-150 ${isPlaying ? "animate-wave" : ""}`}
+                style={{ height: `${h}%`, animationDelay: `${i * 0.06}s`, opacity: isPlaying ? 1 : 0.35 }}
               />
             ))}
           </div>
 
-          <div className="mt-3 flex items-center gap-2 text-xs text-success">
+          <div className="mt-2.5 flex items-center gap-1.5 text-xs text-success">
             <Check className="w-3.5 h-3.5" />
             <span>Sample uploaded successfully</span>
           </div>
 
-          {/* Hidden audio element — src set lazily on first play */}
-          <audio
-            ref={audioRef}
-            onEnded={handleAudioEnded}
-            className="hidden"
-          />
+          <audio ref={audioRef} onEnded={handleAudioEnded} className="hidden" />
         </div>
       )}
     </div>
