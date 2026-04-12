@@ -37,9 +37,9 @@ Synthetic Voice Studio is built to show a **real-world AI application** with bot
 
 It allows users to:
 
-- **Clone a voice** from a short sample
-- **Generate speech** with different emotions
-- **Check whether audio is human or AI-generated**
+- **Clone a voice** from a short sample — male or female, any accent
+- **Generate speech** with different emotions affecting both prosody and tone color
+- **Check whether audio is human or AI-generated** via AudioSeal watermark detection
 - Use everything through a **simple, clean web interface**
 
 ---
@@ -47,130 +47,162 @@ It allows users to:
 ## Features
 
 ### Voice Cloning
-Upload a short voice sample and generate new speech in the same style.
+Upload a short voice sample and generate new speech in the same voice style.  
+The pipeline extracts a speaker embedding from your sample using OpenVoice V2's ReferenceEncoder and applies it via normalizing flow voice conversion.
 
 ### Emotion Control
-Generate speech with different tones such as:
-- Neutral
-- Happy
-- Sad
-- Angry
-- Jolly
-- Anxious
+Generate speech with different tones:
+- Neutral, Happy, Sad, Angry, Jolly, Anxious
+
+Each emotion affects both MeloTTS prosody parameters (speed, noise scale) and the speaker embedding used in voice conversion.
 
 ### Audio Detection
-Analyze uploaded audio and classify whether it is likely:
-- Human speech
-- AI-generated speech
+Analyze uploaded audio and classify whether it is likely human or AI-generated, using AudioSeal watermark detection.
 
 ### Modern UI
-- Clean and responsive frontend
-- Easy upload and playback workflow
-- Works on desktop and mobile
+Clean and responsive frontend, easy upload and playback, works on desktop and mobile.
 
 ### Smart Execution
-- Uses **GPU** when available
-- Falls back to **CPU** automatically
+Uses GPU when available, falls back to CPU automatically.
 
 ---
 
 ## How It Works
 
 ```text
-User Uploads Audio + Text
-           │
-           ▼
-   Reference Voice Processing
-           │
-           ▼
-   Text-to-Speech Generation
-           │
-           ▼
-   Voice Style Transfer
-           │
-           ▼
-   Watermark / Detection Layer
-           │
-           ▼
-      Final Audio Output
+User Uploads Audio Sample + Text Script
+              │
+              ▼
+  Whisper sentence-level segmentation
+  → ReferenceEncoder extracts speaker SE
+              │
+              ▼
+  MeloTTS EN_NEWEST generates TTS base audio
+  (with emotion-driven prosody)
+              │
+              ▼
+  OpenVoice V2 voice conversion
+  (normalizing flow: src_se → tgt_se)
+              │
+              ▼
+  AudioSeal watermark embedding
+              │
+              ▼
+        Final Audio Output
 ```
 
-### Main Pipeline
-- **OpenVoice V2** → voice style transfer
-- **MeloTTS** → speech generation
-- **faster-whisper** → audio segmentation
-- **AudioSeal** → watermarking + detection
+### Main Pipeline Components
+- **OpenVoice V2** — voice style transfer via normalizing flow
+- **MeloTTS EN_NEWEST** — highest quality English TTS base speaker
+- **faster-whisper** — sentence-level audio segmentation for SE extraction
+- **AudioSeal** — watermarking and AI-audio detection
 
 ---
 
 ## Tech Stack
 
 ### Frontend
-- React
-- TypeScript
-- Tailwind CSS
-- Vite
+- React 18, TypeScript, Tailwind CSS, Vite
 
 ### Backend
-- Python
-- Flask
-- PyTorch
+- Python 3.10, Flask, PyTorch, CUDA
 
 ### AI / Audio
-- OpenVoice V2
-- MeloTTS
-- AudioSeal
+- OpenVoice V2 (MyShell AI)
+- MeloTTS EN_NEWEST (myshell-ai/MeloTTS-English-v3)
+- AudioSeal (Meta)
 - faster-whisper
 
 ### Deployment
-- Vercel
-- Hugging Face Spaces
-- Docker
+- Vercel (frontend) + Hugging Face Spaces Docker (backend)
 
 ---
 
+## Local Setup
 
-## 📡 API Overview
+### Requirements
+- Python 3.9+ (3.10 recommended)
+- Node.js 16+
+- CUDA-capable GPU recommended (CPU fallback works but is slow)
 
-### Health Check
-```http
-GET /api/health
+### Backend
+```bash
+python -m venv venv
+venv\Scripts\activate        # Windows
+pip install -r requirements_api.txt
+pip install audioseal huggingface_hub
+pip install -e OpenVoice --no-deps
+python api_server.py
 ```
 
-### Generate Voice
-```http
-POST /api/generate
+### Frontend
+```bash
+cd frontend
+npm install
+npm run dev
 ```
 
-### Download Audio
-```http
-GET /api/download/:audio_id
+Or use `start.bat` on Windows to launch both at once.
+
+### Model Checkpoints
+Place OpenVoice V2 checkpoints at:
+```
+checkpoints_v2/
+  converter/
+    config.json
+    checkpoint.pth        ← download from HF or set HF_CHECKPOINT_REPO
+  base_speakers/ses/
+    en-newest.pth         ← committed to repo (1.65 KB)
+    en-default.pth        ← committed to repo (1.74 KB)
+    ... (other small SE files)
 ```
 
-### Authenticate Audio
+Set `HF_CHECKPOINT_REPO=your-hf-repo-id` to auto-download `checkpoint.pth` at startup.
+
+---
+
+## HF Spaces Deployment
+
+The backend runs as a Docker container on HF Spaces.
+
+**Environment variables to set in HF Space settings:**
+- `HF_CHECKPOINT_REPO` — your HF model repo ID containing the large checkpoint files
+- `HF_TOKEN` — (optional) HF read token if repo is private
+
+The container automatically downloads `checkpoint.pth` on startup and pre-caches all MeloTTS and BERT models at build time.
+
+---
+
+## API Overview
+
 ```http
-POST /api/authenticate
+GET  /api/health              — server status + device info
+POST /api/generate            — generate voice clone (multipart: audio + text + emotion)
+GET  /api/download/:audio_id  — download generated WAV
+POST /api/authenticate        — detect AI watermark in audio
+GET  /api/emotions            — list available emotion options
 ```
 
 ---
 
 ## Limitations
 
-- Slower performance on CPU
-- Best results come from clean voice samples
-- Default setup is mainly focused on English
-- Some third-party models are non-commercial only
+- Best results from clean, continuous speech samples (10–60 seconds)
+- Short samples (< 5s) may produce weaker voice embeddings
+- EN_NEWEST is English-only; other languages fall back to EN-Default
+- CPU generation takes 1–3 minutes; GPU takes 5–20 seconds
+- AudioSeal is a non-commercial license — check before commercial use
 
 ---
 
-## 📄 License
+## License
 
 This project is released under the **MIT License**.
 
 ### Third-party tools
 - **OpenVoice V2** — MIT
 - **MeloTTS** — MIT
-- **AudioSeal** — CC-BY-NC 4.0
+- **AudioSeal** — CC-BY-NC 4.0 (non-commercial)
 - **faster-whisper** — MIT
 
 > Always review third-party licenses before commercial use.

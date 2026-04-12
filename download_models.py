@@ -4,10 +4,11 @@ download_models.py
 Downloads OpenVoice V2 checkpoints from a Hugging Face model repo at startup
 and places them into the local directory structure the app expects.
 
-Your HF model repo has this layout (matching the local checkpoints_v2/ tree):
+Your HF model repo must have this layout (matching the local checkpoints_v2/ tree):
     checkpoints_v2/converter/config.json
     checkpoints_v2/converter/checkpoint.pth
     checkpoints_v2/base_speakers/ses/en-default.pth
+    checkpoints_v2/base_speakers/ses/en-newest.pth   ← required for EN_NEWEST speaker
 
 Required environment variable:
     HF_CHECKPOINT_REPO   — HF repo ID, e.g. "Aniket-ux3/openvoice-checkpoints"
@@ -15,6 +16,9 @@ Required environment variable:
 
 If HF_CHECKPOINT_REPO is not set this script is a no-op (safe for local dev
 where you already have the files in place).
+
+MeloTTS models (EN, EN_NEWEST, etc.) are downloaded automatically at runtime
+by the MeloTTS library itself — they do not need to be in the HF checkpoint repo.
 """
 
 import os
@@ -24,12 +28,17 @@ import shutil
 REPO_ID  = os.environ.get("HF_CHECKPOINT_REPO", "")
 HF_TOKEN = os.environ.get("HF_TOKEN", None)
 
-# Maps: path inside the HF repo → local path the app needs
+# Maps: path inside the HF repo → local path the app needs.
 # The HF repo folder structure mirrors the local checkpoints_v2/ layout.
+#
+# en-newest.pth is the source speaker embedding for the EN_NEWEST MeloTTS
+# speaker (MeloTTS-English-v3). It must be present for voice conversion to work
+# correctly when EN_NEWEST is the selected TTS speaker.
 FILE_MAP = {
-    "checkpoints_v2/converter/config.json":              "checkpoints_v2/converter/config.json",
-    "checkpoints_v2/converter/checkpoint.pth":           "checkpoints_v2/converter/checkpoint.pth",
-    "checkpoints_v2/base_speakers/ses/en-default.pth":   "checkpoints_v2/base_speakers/ses/en-default.pth",
+    "checkpoints_v2/converter/config.json":               "checkpoints_v2/converter/config.json",
+    "checkpoints_v2/converter/checkpoint.pth":            "checkpoints_v2/converter/checkpoint.pth",
+    "checkpoints_v2/base_speakers/ses/en-default.pth":    "checkpoints_v2/base_speakers/ses/en-default.pth",
+    "checkpoints_v2/base_speakers/ses/en-newest.pth":     "checkpoints_v2/base_speakers/ses/en-newest.pth",
 }
 
 
@@ -57,7 +66,7 @@ def download_checkpoints():
         try:
             cached = hf_hub_download(
                 repo_id=REPO_ID,
-                filename=hf_path,      # path inside the HF repo
+                filename=hf_path,
                 token=HF_TOKEN,
                 repo_type="model",
             )
@@ -66,8 +75,14 @@ def download_checkpoints():
 
         except Exception as e:
             print(f"[MODELS] ✗ Failed to download '{hf_path}': {e}")
-            print("[MODELS] Cannot start without model checkpoints. Aborting.")
-            sys.exit(1)
+            if "en-newest" in hf_path:
+                # Non-fatal: fall back to en-default.pth if en-newest is missing
+                print("[MODELS] WARNING: en-newest.pth missing from HF repo.")
+                print("[MODELS] Upload it from: checkpoints_v2/base_speakers/ses/en-newest.pth")
+                print("[MODELS] Continuing — will use en-default.pth as fallback source SE.")
+            else:
+                print("[MODELS] Cannot start without model checkpoints. Aborting.")
+                sys.exit(1)
 
     print("[MODELS] All checkpoints ready.")
 

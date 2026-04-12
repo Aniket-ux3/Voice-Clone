@@ -78,36 +78,8 @@ app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['OUTPUT_FOLDER'] = OUTPUT_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024
 
-# ── Device selection — dual cuDNN probe ───────────────────────────────────────
-#
-# WHY TWO PROBES:
-#   This project uses two SEPARATE CUDA stacks that each require their own
-#   cuDNN DLLs:
-#
-#   Stack A — PyTorch (OpenVoice ToneColorConverter, MeloTTS, AudioSeal)
-#     Uses cudnn64_8.dll / libcudnn.so.8
-#     Tested by running weight_norm(Conv2d) on CUDA — exactly what
-#     ReferenceEncoder does inside extract_se().
-#
-#   Stack B — CTranslate2 (faster-whisper backend in se_extractor_patched.py)
-#     Uses cudnn_ops_infer64_8.dll / libcudnn_ops_infer.so.8
-#     This is a DIFFERENT DLL.  It is entirely possible to have PyTorch CUDA
-#     working (probe A passes) while this DLL is missing (probe B fails).
-#
-#   When either DLL is missing the call raises a C-level LoadLibraryError /
-#   SEH exception that Python's `except Exception` CANNOT catch.  The OS
-#   kills the thread; the client receives ECONNRESET instead of a 500.
-#
-#   NOTE: faster-whisper is ALWAYS loaded on CPU in se_extractor_patched.py
-#   regardless of these probe results — probe B only affects whether we let
-#   PyTorch run on CUDA (since the two stacks share some DLLs).
-#
+# ── Device selection — dual cuDNN probe ──────────────────────────────────────
 def _probe_pytorch_cudnn() -> bool:
-    """
-    Probe A — PyTorch cuDNN.
-    Replicates the exact Conv2d + weight_norm pattern from OpenVoice's
-    ReferenceEncoder.  If this fails we must use CPU for all PyTorch ops.
-    """
     if not torch.cuda.is_available():
         return False
     try:
@@ -123,47 +95,34 @@ def _probe_pytorch_cudnn() -> bool:
         print("[DEVICE] Probe A (PyTorch cuDNN): PASSED")
         return True
     except Exception as e:
-        print(f"[DEVICE] Probe A (PyTorch cuDNN): FAILED — {e}")
+        print(f"[DEVICE] Probe A (PyTorch cuDNN): FAILED -- {e}")
         return False
 
 
 def _probe_ctranslate2_cudnn() -> bool:
-    """
-    Probe B — CTranslate2 cuDNN (cudnn_ops_infer64_8.dll).
-    faster-whisper uses CTranslate2 which links this specific DLL.
-    Probe by calling ctranslate2.get_cuda_device_count() which initialises
-    the CUDA context and will raise if the DLL is absent.
-    If CTranslate2 is not installed at all, skip (no risk from that path).
-    """
     try:
         import ctranslate2
     except ImportError:
-        print("[DEVICE] Probe B (CTranslate2 cuDNN): skipped — not installed.")
-        return True  # No CTranslate2 = no DLL risk from this path
-
+        print("[DEVICE] Probe B (CTranslate2 cuDNN): skipped -- not installed.")
+        return True
     try:
         n = ctranslate2.get_cuda_device_count()
         print(f"[DEVICE] Probe B (CTranslate2 cuDNN): PASSED ({n} device(s))")
         return True
     except Exception as e:
-        print(f"[DEVICE] Probe B (CTranslate2 cuDNN): FAILED — {e}")
-        print("[DEVICE] Missing: cudnn_ops_infer64_8.dll (Windows) or libcudnn_ops_infer.so.8 (Linux)")
-        print("[DEVICE] Install cuDNN 8.x runtime: https://developer.nvidia.com/cudnn")
+        print(f"[DEVICE] Probe B (CTranslate2 cuDNN): FAILED -- {e}")
         return False
 
 
 def _select_device() -> str:
     if not torch.cuda.is_available():
-        print("[DEVICE] CUDA not available — using CPU.")
+        print("[DEVICE] CUDA not available -- using CPU.")
         return "cpu"
-
     probe_a = _probe_pytorch_cudnn()
     probe_b = _probe_ctranslate2_cudnn()
-
     if probe_a and probe_b:
-        print("[DEVICE] Both cuDNN probes passed — running on CUDA.")
+        print("[DEVICE] Both cuDNN probes passed -- running on CUDA.")
         return "cuda"
-
     failing = []
     if not probe_a:
         failing.append("PyTorch cuDNN (cudnn64_8.dll)")
@@ -178,10 +137,8 @@ device = _select_device()
 print(f"[DEVICE] Running on: {device.upper()}")
 
 if device == "cpu" and torch.cuda.is_available():
-    # Belt-and-suspenders: hide all CUDA devices from every library in this
-    # process so nothing can accidentally sneak onto GPU mid-request.
     os.environ["CUDA_VISIBLE_DEVICES"] = ""
-    print("[DEVICE] CUDA_VISIBLE_DEVICES='' — all ops pinned to CPU.")
+    print("[DEVICE] CUDA_VISIBLE_DEVICES='' -- all ops pinned to CPU.")
 
 TARGET_SR = 22050
 
@@ -198,12 +155,11 @@ _BACKEND_ERROR_MAP = [
     ("model loading failed",         "AI models are still initialising. Please wait a moment and try again."),
     ("failed to preprocess",         "Could not read the uploaded audio file. Please try a WAV or MP3 under 50 MB."),
     ("out of memory",                "The server ran out of memory. Please try a shorter script or smaller audio file."),
-    ("cudnn",                        "GPU library (cuDNN) error. The server has fallen back to CPU — please try again."),
-    ("cuda",                         "GPU error encountered. The server has fallen back to CPU — please try again."),
+    ("cudnn",                        "GPU library (cuDNN) error. The server has fallen back to CPU -- please try again."),
+    ("cuda",                         "GPU error encountered. The server has fallen back to CPU -- please try again."),
 ]
 
 def safe_error(raw: str, fallback: str = "An internal error occurred. Please try again.") -> str:
-    """Return a clean user-facing error string. Never leaks tracebacks or paths."""
     low = raw.lower()
     for fragment, message in _BACKEND_ERROR_MAP:
         if fragment in low:
@@ -251,7 +207,7 @@ def preprocess_audio(input_path, output_path):
 
 
 def torchaudio_load(path):
-    """Load audio — soundfile first, torchaudio second, pydub last resort."""
+    """Load audio -- soundfile first, torchaudio second, pydub last resort."""
     try:
         import soundfile as sf
         import numpy as np
@@ -274,7 +230,7 @@ def torchaudio_load(path):
 
 
 def torchaudio_save(path, waveform, sr):
-    """Save WAV — soundfile first, torchaudio second, pydub last resort."""
+    """Save WAV -- soundfile first, torchaudio second, pydub last resort."""
     try:
         import soundfile as sf
         sf.write(path, waveform.numpy().T, sr, subtype='PCM_16')
@@ -295,10 +251,28 @@ def torchaudio_save(path, waveform, sr):
 
 
 def apply_light_denoising(waveform):
-    """Lightweight smoothing — always CPU to avoid any cuDNN dependency."""
+    """Lightweight smoothing -- always CPU to avoid any cuDNN dependency."""
     return F.avg_pool1d(
         waveform.cpu().unsqueeze(0), kernel_size=3, stride=1, padding=1
     ).squeeze(0)
+
+
+# ── Audio validity check ──────────────────────────────────────────────────────
+
+def _is_valid_audio(path):
+    """Return True only if the file is a real audio file (not HTML/corrupt)."""
+    if not os.path.exists(path) or os.path.getsize(path) < 1024:
+        return False
+    try:
+        with open(path, 'rb') as f:
+            header = f.read(16)
+        if header[:4] == b'RIFF':   return True   # WAV
+        if header[:3] == b'ID3':    return True   # MP3
+        if header[:4] == b'fLaC':  return True   # FLAC
+        if header[:4] == b'OggS':  return True   # OGG
+        return False
+    except Exception:
+        return False
 
 
 # ── Model loading ─────────────────────────────────────────────────────────────
@@ -315,8 +289,18 @@ def load_models():
             converter.load_ckpt(f'{ckpt_converter}/checkpoint.pth')
             print("[INFO] ✓ ToneColorConverter loaded")
 
-            tts_model = TTS(language='EN', device=device)
-            print("[INFO] ✓ MeloTTS loaded")
+            # EN_NEWEST (MeloTTS-English-v3) is the correct language key for the
+            # highest-quality single-speaker model. Its spk2id key is 'EN_NEWEST',
+            # which maps to en-newest.pth via speaker_key.lower().replace('_','-').
+            # EN_V2 (MeloTTS-English-v2) is a different multi-speaker model that
+            # does NOT contain EN-Newest — it silently falls back to EN-US.
+            try:
+                tts_model = TTS(language='EN_NEWEST', device=device)
+                print("[INFO] ✓ MeloTTS EN_NEWEST loaded (en-newest.pth speaker available)")
+            except Exception as _tts_err:
+                print(f"[INFO] EN_NEWEST unavailable ({_tts_err}), falling back to EN")
+                tts_model = TTS(language='EN', device=device)
+                print("[INFO] ✓ MeloTTS EN loaded (EN-Default will be used)")
 
             watermarker = AudioSeal.load_generator("audioseal_wm_16bits").to(device).eval()
             print("[INFO] ✓ AudioSeal watermarker loaded")
@@ -416,41 +400,74 @@ def generate_voice():
         tts_model   = models['tts_model']
         watermarker = models['watermarker']
 
-        # Speaker embedding
-        # se_extractor_patched.get_se() → safe_extract_se() moves vc_model.model
-        # AND vc_model.device to CPU before calling extract_se(), then restores.
-        # This prevents cuDNN crashes in ref_enc on both the PyTorch and
-        # CTranslate2 stacks. The returned tensor is CPU; we move to device after.
+        # ── Speaker embedding ─────────────────────────────────────────────────
+        # get_se() runs Whisper sentence-level segmentation then calls
+        # safe_extract_se() which CPU-pins the model for ref_enc, then restores.
         print(f"[{request_id}] Extracting speaker embedding...")
         try:
             target_se, audio_name = se_extractor.get_se(wav_ref, converter, vad=False)
             target_se = target_se.to(device)
-            norm = torch.norm(target_se)
-            if norm > 0:
-                target_se = target_se / norm
-            print(f"[{request_id}] ✓ Speaker embedding extracted")
+            # DO NOT normalize -- the flow network conditioning depends on the
+            # raw SE scale. Normalizing destroys scale information and causes
+            # the converter to produce a generic/robotic voice regardless of input.
+            print(f"[{request_id}] ✓ Speaker embedding extracted (norm={torch.norm(target_se).item():.3f})")
         except Exception as e:
             print(f"[{request_id}] ERROR in speaker extraction: {e}")
             traceback.print_exc()
             return jsonify({
                 'error': safe_error(
                     str(e),
-                    'Speaker extraction failed. Please upload a clearer audio sample (10–30 s of speech).',
+                    'Speaker extraction failed. Please upload a clearer audio sample (10-30 s of speech).',
                 )
             }), 500
 
-        # TTS
-        print(f"[{request_id}] Generating TTS...")
+        # ── TTS with emotion-driven prosody ───────────────────────────────────
+        print(f"[{request_id}] Generating TTS (emotion={emotion})...")
         base_path = os.path.join(app.config['OUTPUT_FOLDER'], f"{request_id}_base.wav")
         temp_paths.append(base_path)
+
+        EMOTION_PROSODY = {
+            # (sdp_ratio, noise_scale, noise_scale_w, speed)
+            'neutral': (0.2, 0.6, 0.8, 1.0),
+            'happy':   (0.4, 0.8, 0.9, 1.15),
+            'sad':     (0.1, 0.4, 0.6, 0.80),
+            'angry':   (0.5, 0.9, 1.0, 1.10),
+            'jolly':   (0.5, 0.9, 1.0, 1.20),
+            'anxious': (0.3, 0.7, 0.9, 1.05),
+        }
+        sdp, ns, nsw, spd = EMOTION_PROSODY.get(emotion, EMOTION_PROSODY['neutral'])
+
+        # Pick the best available MeloTTS speaker.
+        # Priority: EN_NEWEST (single-speaker EN_NEWEST model, key 'EN_NEWEST')
+        #           > EN-Default > EN-US > other EN variants.
+        # SE filename: speaker_key.lower().replace('_', '-') + '.pth'
+        # This matches the official OpenVoice demo_part3.ipynb convention exactly.
+        _spk2id = tts_model.hps.data.spk2id
+        TTS_SPEAKER = None
+        for _candidate in ('EN_NEWEST', 'EN-Newest', 'EN-Default', 'EN-US', 'EN-BR', 'EN-AU', 'EN-IN'):
+            if _candidate in _spk2id:
+                TTS_SPEAKER = _candidate
+                break
+        if TTS_SPEAKER is None:
+            TTS_SPEAKER = list(_spk2id.keys())[0]  # HParams.keys() is safe; iter() is not
+
+        # SE filename: speaker_key.lower().replace('_', '-') + '.pth'
+        # e.g. EN_NEWEST -> en-newest.pth, EN-Default -> en-default.pth
+        _se_name = TTS_SPEAKER.lower().replace('_', '-')
+        SOURCE_SE_FILE = f'checkpoints_v2/base_speakers/ses/{_se_name}.pth'
+        if not os.path.exists(SOURCE_SE_FILE):
+            SOURCE_SE_FILE = 'checkpoints_v2/base_speakers/ses/en-default.pth'
+            print(f"[{request_id}] source SE for {TTS_SPEAKER} not found, using en-default.pth")
+
         try:
-            speaker_id = tts_model.hps.data.spk2id['EN-Default']
+            speaker_id = _spk2id[TTS_SPEAKER]
+            print(f"[{request_id}] TTS speaker: {TTS_SPEAKER}, source SE: {os.path.basename(SOURCE_SE_FILE)}")
             tts_model.tts_to_file(
                 text_script, speaker_id, base_path,
-                sdp_ratio=0.2, noise_scale=0.6, noise_scale_w=0.8,
-                speed=0.9, quiet=True,
+                sdp_ratio=sdp, noise_scale=ns, noise_scale_w=nsw,
+                speed=spd, quiet=True,
             )
-            print(f"[{request_id}] ✓ TTS generated")
+            print(f"[{request_id}] ✓ TTS generated (speaker={TTS_SPEAKER}, sdp={sdp}, speed={spd})")
         except Exception as e:
             print(f"[{request_id}] ERROR in TTS: {e}")
             traceback.print_exc()
@@ -458,23 +475,60 @@ def generate_voice():
                 'error': safe_error(str(e), 'TTS generation failed. Please try a shorter script (under 200 characters).')
             }), 500
 
-        # Voice conversion
+        # ── Voice conversion ──────────────────────────────────────────────────
         print(f"[{request_id}] Applying voice conversion...")
         raw_output = os.path.join(app.config['OUTPUT_FOLDER'], f"{request_id}_raw.wav")
         temp_paths.append(raw_output)
         try:
-            source_se = torch.load(
-                'checkpoints_v2/base_speakers/ses/en-default.pth',
-                map_location=device,
-            ).to(device)
+            source_se = torch.load(SOURCE_SE_FILE, map_location=device).to(device)
+
+            # Norm-match source_se to target_se.
+            # The flow network was trained on (src, tgt) SE pairs where both
+            # come from the same ReferenceEncoder and have comparable magnitudes.
+            # The pre-computed .pth files can have norm ~11 while extracted
+            # target SEs are ~8-10. This asymmetry biases the flow inversion
+            # and weakens identity transfer. Rescaling fixes the imbalance.
+            tgt_norm = torch.norm(target_se).item()
+            src_norm = torch.norm(source_se).item()
+            if src_norm > 0 and tgt_norm > 0:
+                source_se = source_se * (tgt_norm / src_norm)
+                print(f"[{request_id}] source_se norm: {src_norm:.3f} -> {tgt_norm:.3f} (matched to target)")
+
+            # ── Emotion style blending ────────────────────────────────────────
+            # Use safe_extract_se directly -- bypasses Whisper/VAD segmentation
+            # which is inappropriate for short emotion reference clips.
+            emotion_wav = os.path.join('emotions', f'{emotion}.wav')
+            final_tgt_se = target_se
+            if emotion != 'neutral' and _is_valid_audio(emotion_wav):
+                try:
+                    print(f"[{request_id}] Blending emotion SE: {emotion}")
+                    emo_wav_proc = os.path.join(app.config['UPLOAD_FOLDER'], f"{request_id}_emo.wav")
+                    temp_paths.append(emo_wav_proc)
+                    preprocess_audio(emotion_wav, emo_wav_proc)
+                    emo_se = se_extractor.safe_extract_se(converter, [emo_wav_proc])
+                    emo_se = emo_se.to(device)
+                    tgt_scale = torch.norm(target_se).item()
+                    emo_scale = torch.norm(emo_se).item()
+                    if emo_scale > 0:
+                        emo_se_scaled = emo_se * (tgt_scale / emo_scale)
+                        final_tgt_se = 0.75 * target_se + 0.25 * emo_se_scaled
+                    print(f"[{request_id}] ✓ Emotion SE blended "
+                          f"(tgt_norm={tgt_scale:.3f}, emo_norm={emo_scale:.3f})")
+                except Exception as emo_err:
+                    print(f"[{request_id}] WARNING: emotion blending skipped ({emo_err})")
+                    final_tgt_se = target_se
+
+            # tau = posterior encoder noise scale (reparameterization std dev).
+            # 0.3 gives clean, deterministic conversion. Higher values add
+            # distortion -- they do NOT increase target-voice influence.
             converter.convert(
                 audio_src_path=base_path,
                 src_se=source_se,
-                tgt_se=target_se,
+                tgt_se=final_tgt_se,
                 output_path=raw_output,
                 tau=0.3,
             )
-            print(f"[{request_id}] ✓ Voice converted")
+            print(f"[{request_id}] ✓ Voice converted (tau=0.3)")
         except Exception as e:
             print(f"[{request_id}] ERROR in voice conversion: {e}")
             traceback.print_exc()
@@ -482,7 +536,7 @@ def generate_voice():
                 'error': safe_error(str(e), 'Voice conversion failed. Try re-uploading the reference audio.')
             }), 500
 
-        # Denoising — always CPU (avg_pool1d, no cuDNN)
+        # ── Denoising ─────────────────────────────────────────────────────────
         print(f"[{request_id}] Denoising...")
         try:
             denoised_waveform, raw_sr = torchaudio_load(raw_output)
@@ -492,14 +546,14 @@ def generate_voice():
         except Exception as e:
             print(f"[{request_id}] WARNING: Denoising skipped ({e})")
 
-        # Watermarking
+        # ── Watermarking ──────────────────────────────────────────────────────
         print(f"[{request_id}] Embedding watermark...")
         final_path = os.path.join(app.config['OUTPUT_FOLDER'], f"{request_id}_final.wav")
         try:
             wav, sr = torchaudio_load(raw_output)
             wav = wav.to(device)
             with torch.no_grad():
-                wm = watermarker.get_watermark(wav.unsqueeze(0), sr)
+                wm = watermarker.get_watermark(wav.unsqueeze(0))  # sr arg removed: deprecated in AudioSeal 0.2+
                 final_audio = wav + wm.squeeze(0)
             torchaudio_save(final_path, final_audio.cpu(), sr)
             print(f"[{request_id}] ✓ Watermark embedded")
@@ -507,7 +561,7 @@ def generate_voice():
             print(f"[{request_id}] WARNING: Watermarking failed ({e}), using raw output")
             shutil.copy2(raw_output, final_path)
 
-        # Cleanup
+        # ── Cleanup ───────────────────────────────────────────────────────────
         time.sleep(0.3)
         for path in temp_paths:
             try:
@@ -627,6 +681,71 @@ download_checkpoints()
 print("[BOOT] Preloading AI models...")
 load_models()
 print("[BOOT] Models preloaded successfully!")
+
+# --- VALIDATE & REGENERATE EMOTION WAV FILES ---
+def _generate_emotion_wavs():
+    """
+    Synthesise emotion reference wavs using MeloTTS at startup.
+    Skips any wav that is already a valid audio file.
+    These are used as SE reference clips for emotion style blending.
+    """
+    models = load_models()
+    tts = models['tts_model']
+
+    EMOTION_PROSODY = {
+        'neutral': (0.2, 0.6, 0.8, 1.0),
+        'happy':   (0.4, 0.8, 0.9, 1.15),
+        'sad':     (0.1, 0.4, 0.6, 0.80),
+        'angry':   (0.5, 0.9, 1.0, 1.10),
+        'jolly':   (0.5, 0.9, 1.0, 1.20),
+        'anxious': (0.3, 0.7, 0.9, 1.05),
+    }
+    REF_TEXT = (
+        "The quick brown fox jumps over the lazy dog. "
+        "She sells seashells by the seashore."
+    )
+
+    _spk2id = tts.hps.data.spk2id
+    TTS_SPEAKER = None
+    for _candidate in ('EN_NEWEST', 'EN-Newest', 'EN-Default', 'EN-US', 'EN-BR', 'EN-AU', 'EN-IN'):
+        if _candidate in _spk2id:
+            TTS_SPEAKER = _candidate
+            break
+    if TTS_SPEAKER is None:
+        TTS_SPEAKER = list(_spk2id.keys())[0]  # HParams.keys() is safe; iter() is not
+    speaker_id = _spk2id[TTS_SPEAKER]
+
+    os.makedirs('emotions', exist_ok=True)
+    regenerated = []
+
+    for emotion, (sdp, ns, nsw, spd) in EMOTION_PROSODY.items():
+        wav_path = os.path.join('emotions', f'{emotion}.wav')
+        if _is_valid_audio(wav_path):
+            print(f"[BOOT] Emotion wav OK: {emotion}")
+            continue
+        try:
+            print(f"[BOOT] Regenerating emotion wav: {emotion} ...")
+            tts.tts_to_file(
+                REF_TEXT, speaker_id, wav_path,
+                sdp_ratio=sdp, noise_scale=ns, noise_scale_w=nsw,
+                speed=spd, quiet=True,
+            )
+            if _is_valid_audio(wav_path):
+                print(f"[BOOT] ✓ Generated: {wav_path}")
+                regenerated.append(emotion)
+            else:
+                print(f"[BOOT] ✗ Output invalid after generation: {wav_path}")
+        except Exception as e:
+            print(f"[BOOT] ✗ Failed to generate emotion wav for '{emotion}': {e}")
+
+    if regenerated:
+        print(f"[BOOT] Regenerated {len(regenerated)} emotion wavs: {', '.join(regenerated)}")
+    print("[BOOT] Emotion wav check complete.")
+
+
+print("[BOOT] Checking emotion reference wavs...")
+_generate_emotion_wavs()
+print("[BOOT] Startup complete -- server ready.")
 
 if __name__ == '__main__':
     print(f"\n{'='*70}")

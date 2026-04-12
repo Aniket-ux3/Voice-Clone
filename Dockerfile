@@ -60,21 +60,20 @@ RUN git clone https://github.com/myshell-ai/OpenVoice.git OpenVoice && \
         whisper-timestamped==1.14.2
 
 # ── Overwrite se_extractor.py with our patched version ───────────────────────
-# se_extractor_patched.py lives at the repo root (tracked by git) and is
-# copied over the freshly-cloned upstream file inside the container.
-COPY --chown=user se_extractor_patched.py OpenVoice/openvoice/se_extractor.py
+# se_extractor.py is tracked at the repo root as se_extractor.py and copied
+# into the freshly-cloned OpenVoice tree. This keeps our patch in git without
+# needing to vendor the entire OpenVoice source.
+# Key fix: sentence-level segmentation (word_timestamps=False) instead of
+# word-level, which caused voice embeddings to collapse for short clips.
+COPY --chown=user se_extractor.py OpenVoice/openvoice/se_extractor.py
 
 # ── Download unidic dictionary (required by MeCab / MeloTTS Japanese) ────────
-# unidic ships as an empty package; the actual dictionary must be downloaded
-# separately with `python -m unidic download` before MeCab can initialise.
 RUN python -m unidic download
 
 # ── Pre-trust and cache silero-vad so runtime never gets an interactive prompt ──
-# torch.hub prompts "do you trust this repo?" when it first sees an unknown
-# source.  In a headless container stdin is closed → EOFError.  We pre-download
-# the model here so the cache exists and the check is skipped at runtime.
 COPY --chown=user cache_silero.py .
 RUN python cache_silero.py
+
 # ── Pre-download NLTK data ────────────────────────────────────────────────────
 RUN python -c "\
 import nltk; \
@@ -82,12 +81,36 @@ nltk.download('averaged_perceptron_tagger_eng', quiet=True); \
 nltk.download('punkt', quiet=True); \
 nltk.download('punkt_tab', quiet=True)"
 
+# ── Pre-download MeloTTS EN_NEWEST model ─────────────────────────────────────
+# EN_NEWEST (myshell-ai/MeloTTS-English-v3) is the highest-quality English TTS
+# speaker used for voice conversion. Downloading at build time avoids a cold-
+# start delay of ~200MB on the first request in production.
+# Falls back silently if the download fails (network issues during build).
+RUN python -c "\
+from melo.api import TTS; \
+import sys; \
+print('[BUILD] Pre-downloading MeloTTS EN_NEWEST...'); \
+TTS(language='EN_NEWEST', device='cpu'); \
+print('[BUILD] MeloTTS EN_NEWEST cached.')" || \
+    echo "[BUILD] WARNING: EN_NEWEST pre-download failed — will download at runtime."
+
+# ── Pre-download BERT model used by MeloTTS ──────────────────────────────────
+# MeloTTS loads bert-base-uncased on first TTS call. Baking it into the image
+# avoids a 440 MB download on the first request.
+RUN python -c "\
+from transformers import BertForMaskedLM, AutoTokenizer; \
+print('[BUILD] Pre-downloading BERT for MeloTTS...'); \
+AutoTokenizer.from_pretrained('bert-base-uncased'); \
+BertForMaskedLM.from_pretrained('bert-base-uncased'); \
+print('[BUILD] BERT cached.')" || \
+    echo "[BUILD] WARNING: BERT pre-download failed — will download at runtime."
+
 # ── Copy application code ─────────────────────────────────────────────────────
 COPY --chown=user api_server.py .
 COPY --chown=user download_models.py .
 
 # ── Create temp directories ───────────────────────────────────────────────────
-RUN mkdir -p uploads outputs processed
+RUN mkdir -p uploads outputs processed emotions
 
 # ── Expose HF Spaces port ─────────────────────────────────────────────────────
 EXPOSE 7860

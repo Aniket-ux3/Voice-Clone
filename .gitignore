@@ -24,10 +24,16 @@ htmlcov/
 .coverage
 .coverage.*
 
-# ── Model weights (large — stored on HF Hub, downloaded at runtime) ───────────
+# ── Model weights ─────────────────────────────────────────────────────────────
+# Large checkpoint — NOT committed. Downloaded at container startup via
+# download_models.py using the HF_CHECKPOINT_REPO environment variable.
 checkpoints_v2/converter/checkpoint.pth
 
-# ── Runtime temp files (auto-generated, never commit) ────────────────────────
+# Small speaker embedding .pth files (18 KB total) ARE committed so they are
+# available immediately without requiring HF_CHECKPOINT_REPO to be set.
+# Do NOT add checkpoints_v2/base_speakers/ to this ignore list.
+
+# ── Runtime temp directories (auto-generated, never commit contents) ──────────
 processed/*
 !processed/.gitkeep
 uploads/*
@@ -35,8 +41,10 @@ uploads/*
 outputs/*
 !outputs/.gitkeep
 
-# ── Audio files ───────────────────────────────────────────────────────────────
-*.wav
+# ── Emotion wavs (auto-generated at server startup, not committed) ────────────
+emotions/*.wav
+
+# ── Audio / media files ───────────────────────────────────────────────────────
 *.mp3
 *.mp4
 *.ogg
@@ -45,6 +53,8 @@ outputs/*
 *.aac
 *.aiff
 *.wma
+# Note: *.wav is intentionally NOT ignored globally — the .pth and source SE
+# files are not wav. Wav files in uploads/outputs/emotions are covered above.
 
 # ── Environment variables ─────────────────────────────────────────────────────
 .env
@@ -55,8 +65,9 @@ outputs/*
 frontend/.env
 frontend/.env.local
 frontend/.env.production
+# .env.example IS committed — it documents required variables without secrets
 
-# ── Node / Frontend ───────────────────────────────────────────────────────────
+# ── Node / Frontend build ─────────────────────────────────────────────────────
 node_modules/
 frontend/node_modules/
 frontend/dist/
@@ -85,24 +96,35 @@ desktop.ini
 *~
 .vs/
 
-# ── Temp / backup / trash files ──────────────────────────────────────────────
-tmp/
-temp/
-*.tmp
-*.bak
-*.orig
-.trash_*
-
-# ── Dev tooling (not needed in repo) ─────────────────────────────────────────
+# ── Dev tooling — local only, not relevant to collaborators or deployment ─────
+# Claude MCP configuration (machine-specific)
 .mcp.json
+# Claude agent skills (IDE plugin artifacts)
 .agent/
-.packageignore
+# Docker compose local overrides
 docker-compose.override.yml
 
-# ── HF cache (auto-downloaded) ───────────────────────────────────────────────
-.cache/
-huggingface/
+# ── Trash / backup files (prefixed to mark for deletion) ─────────────────────
+.trash_*
+*.bak
+*.orig
+*.tmp
+tmp/
+temp/
 
-# ── Python pycache in OpenVoice subdir ───────────────────────────────────────
+# ── Superseded files (kept locally for reference, not part of the codebase) ───
+# se_extractor.py is now the canonical file at OpenVoice/openvoice/se_extractor.py
+se_extractor_patched.py
+
+# ── OpenVoice subdir artifacts ────────────────────────────────────────────────
 OpenVoice/**/__pycache__/
 OpenVoice/**/*.pyc
+OpenVoice/**/*.egg-info/
+# OpenVoice has its own .git — exclude it so our repo doesn't treat it as
+# a submodule (we vendor the source directly and patch se_extractor.py)
+OpenVoice/.git/
+OpenVoice/.gitignore
+
+# ── HF / torch cache (auto-downloaded at runtime) ────────────────────────────
+.cache/
+huggingface/

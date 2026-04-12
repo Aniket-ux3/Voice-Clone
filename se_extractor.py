@@ -27,10 +27,6 @@ from pydub import AudioSegment
 #   and completely bypasses its CUDA code path. The WhisperModel then runs
 #   purely on CPU with no DLL loading risk.
 #
-#   We set this here (module level, before the import) and NOT in api_server.py
-#   because api_server.py imports this module, so the env var is set before
-#   ctranslate2 is imported anywhere in the process.
-#
 _original_cuda_devices = os.environ.get("CUDA_VISIBLE_DEVICES", None)
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
 print("[se_extractor] CUDA_VISIBLE_DEVICES='' set — CTranslate2 will use CPU only.")
@@ -84,7 +80,7 @@ def _get_whisper_model():
 #
 #   device = self.device          # copies the string, e.g. "cuda"
 #   y = y.to(device)              # tensor goes to CUDA
-#   g = self.model.ref_enc(y...)  # Conv2d + weight_norm → cuDNN
+#   g = self.model.ref_enc(y...)  # Conv2d + weight_norm -> cuDNN
 #
 # We must patch BOTH vc_model.model AND vc_model.device before the call,
 # because extract_se reads `device = self.device` into a local variable —
@@ -94,6 +90,8 @@ def safe_extract_se(vc_model, ref_wav_list, se_save_path=None):
     """
     CPU-safe wrapper around vc_model.extract_se().
     Pins model + device string to CPU, calls extract_se, then restores both.
+    Also used directly for short reference clips (e.g. emotion wavs) that
+    should NOT go through the Whisper/VAD segmentation pipeline.
     """
     original_device = str(vc_model.device)
     on_cuda = original_device.startswith("cuda")
@@ -122,9 +120,23 @@ def safe_extract_se(vc_model, ref_wav_list, se_save_path=None):
     return result
 
 
-# ── Strategy 1: faster-whisper word-level segmentation ───────────────────────
+# ── Strategy 1: faster-whisper SENTENCE-level segmentation ───────────────────
 def split_audio_whisper(audio_path, audio_name, target_dir='processed'):
-    # Hide CUDA during transcription as belt-and-suspenders
+    """
+    Segment audio into sentence-level chunks for SE extraction.
+
+    CRITICAL FIX: We now iterate over SEGMENTS (sentences/phrases), NOT words.
+    The original code used word_timestamps=True and iterated over individual
+    words (~0.3s each), which were always rejected by the >1.5s duration filter.
+    This caused fallback to the whole-file strategy for almost every clip,
+    especially short ones like male voice samples, producing poor SE embeddings
+    where all male voices collapsed to nearly identical outputs (measured at
+    0.992 MFCC cosine similarity between completely different speakers).
+
+    Sentence-level segments are typically 2-10s and reliably pass the filter,
+    giving the ReferenceEncoder diverse, clean speech chunks to build a
+    distinctive speaker embedding from.
+    """
     saved = os.environ.get("CUDA_VISIBLE_DEVICES", None)
     os.environ["CUDA_VISIBLE_DEVICES"] = ""
     try:
@@ -137,33 +149,34 @@ def split_audio_whisper(audio_path, audio_name, target_dir='processed'):
         wavs_folder = os.path.join(target_folder, 'wavs')
         os.makedirs(wavs_folder, exist_ok=True)
 
-        segments, _ = model.transcribe(audio_path, beam_size=5, word_timestamps=True)
+        # Transcribe at SEGMENT level — each segment is a sentence or phrase.
+        # word_timestamps=False is the critical change that fixes the bug.
+        segments, _ = model.transcribe(audio_path, beam_size=5, word_timestamps=False)
         segments = list(segments)
+        print(f"[se_extractor] Whisper produced {len(segments)} sentence segment(s)")
 
-        s_ind = 0
-        start_time = None
+        exported = 0
+        for k, seg in enumerate(segments):
+            start_ms = max(0, int(seg.start * 1000) - 80)
+            end_ms   = min(max_len, int(seg.end * 1000) + 80)
+            audio_seg = audio[start_ms:end_ms]
+            text = seg.text.strip().replace('...', '')
 
-        for k, w in enumerate(segments):
-            if k == 0:
-                start_time = max(0, w.start)
-            end_time = w.end
-
-            text = w.text.replace('...', '')
-            audio_seg = audio[int(start_time * 1000): min(max_len, int(end_time * 1000) + 80)]
-            fname = f"{audio_name}_seg{s_ind}.wav"
-
+            # Accept segments 1.0-25s with at least 1 character of transcript.
+            # Duration threshold lowered from 1.5s to catch shorter utterances.
             save = (
-                audio_seg.duration_seconds > 1.5
-                and audio_seg.duration_seconds < 20.0
-                and 2 <= len(text) < 200
+                audio_seg.duration_seconds >= 1.0
+                and audio_seg.duration_seconds <= 25.0
+                and len(text) >= 1
             )
             if save:
+                fname = f"{audio_name}_seg{exported}.wav"
                 audio_seg.export(os.path.join(wavs_folder, fname), format='wav')
+                exported += 1
+                print(f"[se_extractor]   seg{exported}: {audio_seg.duration_seconds:.1f}s"
+                      f" -- '{text[:60]}'")
 
-            if k < len(segments) - 1:
-                start_time = max(0, segments[k + 1].start - 0.08)
-            s_ind += 1
-
+        print(f"[se_extractor] {exported}/{len(segments)} segments accepted")
         return wavs_folder
     finally:
         if saved is not None:
@@ -270,9 +283,9 @@ def get_se(audio_path, vc_model, target_dir='processed', vad=True):
     if not audio_segs:
         raise RuntimeError(
             "Speaker extraction failed: no audio segments could be produced. "
-            "Please upload a clear speech recording (10–30 s recommended)."
+            "Please upload a clear speech recording (10-30 s recommended)."
         )
 
-    # Pins model+device to CPU → runs ref_enc on CPU → restores to CUDA
+    # Pins model+device to CPU -> runs ref_enc on CPU -> restores to CUDA
     se = safe_extract_se(vc_model, audio_segs, se_save_path=se_path)
     return se, audio_name

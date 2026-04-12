@@ -1,13 +1,14 @@
 # =============================================================================
-#  .dockerignore — minimize Docker build context sent to HF Spaces builder.
-#  Large files here = slow "building" phase with no visible progress.
+#  .dockerignore — minimises the Docker build context sent to HF Spaces.
+#  Only files actually needed inside the container are allowed through.
+#  Everything else adds build time with no benefit.
 # =============================================================================
 
-# Git
-.git
+# ── Git metadata ──────────────────────────────────────────────────────────────
+.git/
 .gitignore
 
-# Python environments & caches
+# ── Python local environment (container installs its own) ────────────────────
 venv/
 .venv/
 env/
@@ -18,26 +19,28 @@ __pycache__/
 *.so
 *.egg-info/
 
-# Node / Frontend (built separately, served via Vercel)
+# ── Node / Frontend (served via Vercel, not needed in backend container) ──────
 frontend/
 node_modules/
 
-# Large model checkpoints (downloaded at runtime from HF Hub)
-checkpoints_v2/
-
-# OpenVoice (cloned inside container via Dockerfile)
+# ── OpenVoice source (cloned fresh inside the Dockerfile via git clone) ───────
+# The Dockerfile clones OpenVoice and then overwrites se_extractor.py with
+# the patched version from OpenVoice/openvoice/se_extractor.py below.
+# Excluding the whole tree keeps the build context small.
 OpenVoice/
 
-# Runtime temp folders
+# ── Large model checkpoints (downloaded at runtime from HF Hub) ───────────────
+checkpoints_v2/converter/checkpoint.pth
+
+# ── Runtime temp folders (created empty by the Dockerfile) ───────────────────
 uploads/
 outputs/
 processed/
 
-# Emotion audio samples
-emotions/
+# ── Emotion wavs (regenerated at server boot by _generate_emotion_wavs) ───────
+emotions/*.wav
 
-# Audio / media
-*.wav
+# ── Audio / media ─────────────────────────────────────────────────────────────
 *.mp3
 *.mp4
 *.ogg
@@ -45,27 +48,24 @@ emotions/
 *.m4a
 *.aac
 
-# Logs
+# ── Logs ──────────────────────────────────────────────────────────────────────
 *.log
 logs/
 
-# OS / Editor
+# ── OS / Editor artifacts ─────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
 .vscode/
 .idea/
 
-# Secrets
+# ── Secrets (never in container image) ───────────────────────────────────────
 .env
 .env.*
 .mcp.json
 
-# Dev tooling / docs
-.mcp.json
+# ── Dev-only tooling (not needed in production container) ────────────────────
 .agent/
-.packageignore
+.trash_*
+cleanup_cache.bat
+se_extractor_patched.py
 docker-compose.override.yml
-cleanup.bat
-DEPLOYMENT_GUIDE.md
-SETUP_GUIDE.md
-PROJECT_CONTEXT.md
