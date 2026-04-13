@@ -536,29 +536,38 @@ def generate_voice():
                 'error': safe_error(str(e), 'Voice conversion failed. Try re-uploading the reference audio.')
             }), 500
 
-        # ── Denoising ─────────────────────────────────────────────────────────
-        print(f"[{request_id}] Denoising...")
-        try:
-            denoised_waveform, raw_sr = torchaudio_load(raw_output)
-            denoised_waveform = apply_light_denoising(denoised_waveform)
-            torchaudio_save(raw_output, denoised_waveform, raw_sr)
-            print(f"[{request_id}] ✓ Denoised")
-        except Exception as e:
-            print(f"[{request_id}] WARNING: Denoising skipped ({e})")
+        # Denoising -- skip on CPU (negligible quality gain, just adds latency)
+        if device != 'cpu':
+            print(f"[{request_id}] Denoising...")
+            try:
+                denoised_waveform, raw_sr = torchaudio_load(raw_output)
+                denoised_waveform = apply_light_denoising(denoised_waveform)
+                torchaudio_save(raw_output, denoised_waveform, raw_sr)
+                print(f"[{request_id}] ✓ Denoised")
+            except Exception as e:
+                print(f"[{request_id}] WARNING: Denoising skipped ({e})")
 
         # ── Watermarking ──────────────────────────────────────────────────────
-        print(f"[{request_id}] Embedding watermark...")
+        # Watermarking is skipped on CPU — AudioSeal runs 10+ sequential neural
+        # network passes per second of audio, which takes 3-5 min on CPU and
+        # causes client timeouts. It is a provenance feature only and does not
+        # affect voice cloning quality. On GPU it runs in <1s.
         final_path = os.path.join(app.config['OUTPUT_FOLDER'], f"{request_id}_final.wav")
-        try:
-            wav, sr = torchaudio_load(raw_output)
-            wav = wav.to(device)
-            with torch.no_grad():
-                wm = watermarker.get_watermark(wav.unsqueeze(0))  # sr arg removed: deprecated in AudioSeal 0.2+
-                final_audio = wav + wm.squeeze(0)
-            torchaudio_save(final_path, final_audio.cpu(), sr)
-            print(f"[{request_id}] ✓ Watermark embedded")
-        except Exception as e:
-            print(f"[{request_id}] WARNING: Watermarking failed ({e}), using raw output")
+        if device != 'cpu':
+            print(f"[{request_id}] Embedding watermark...")
+            try:
+                wav, sr = torchaudio_load(raw_output)
+                wav = wav.to(device)
+                with torch.no_grad():
+                    wm = watermarker.get_watermark(wav.unsqueeze(0))  # sr arg removed: deprecated in AudioSeal 0.2+
+                    final_audio = wav + wm.squeeze(0)
+                torchaudio_save(final_path, final_audio.cpu(), sr)
+                print(f"[{request_id}] ✓ Watermark embedded")
+            except Exception as e:
+                print(f"[{request_id}] WARNING: Watermarking failed ({e}), using raw output")
+                shutil.copy2(raw_output, final_path)
+        else:
+            print(f"[{request_id}] Watermarking skipped (CPU mode — would cause timeout)")
             shutil.copy2(raw_output, final_path)
 
         # ── Cleanup ───────────────────────────────────────────────────────────

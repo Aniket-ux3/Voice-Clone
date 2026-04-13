@@ -9,39 +9,19 @@ import numpy as np
 from pydub import AudioSegment
 
 # ── CRITICAL: Force CTranslate2 to CPU BEFORE importing faster_whisper ────────
-#
-# The root cause of ECONNRESET crashes:
-#   CTranslate2 (faster-whisper's backend) has a lazy-load mechanism for its
-#   CUDA kernels. Even when you specify device="cpu" in WhisperModel(), if
-#   CTranslate2 detects a CUDA device in the environment, it may attempt to
-#   load CUDA kernel libraries (including cudnn_ops_infer64_8.dll) at
-#   transcribe() time — not at model load time. This is a C-level DLL load
-#   that happens outside Python's exception handling. When the DLL is missing,
-#   it raises a Windows SEH exception / Linux signal that kills the OS thread.
-#   Python's `except Exception` cannot catch this. The thread dies silently,
-#   the socket is dropped, and the client sees ECONNRESET.
-#
-# THE ONLY RELIABLE FIX:
-#   Set CUDA_VISIBLE_DEVICES="" in the environment BEFORE ctranslate2/
-#   faster_whisper is imported. This makes CTranslate2 see zero CUDA devices
-#   and completely bypasses its CUDA code path. The WhisperModel then runs
-#   purely on CPU with no DLL loading risk.
-#
 _original_cuda_devices = os.environ.get("CUDA_VISIBLE_DEVICES", None)
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
-print("[se_extractor] CUDA_VISIBLE_DEVICES='' set — CTranslate2 will use CPU only.")
+print("[se_extractor] CUDA_VISIBLE_DEVICES='' set -- CTranslate2 will use CPU only.")
 
 from faster_whisper import WhisperModel
 
-# Restore CUDA_VISIBLE_DEVICES so PyTorch models (converter, TTS, AudioSeal)
-# can still use GPU after the import is complete.
 if _original_cuda_devices is not None:
     os.environ["CUDA_VISIBLE_DEVICES"] = _original_cuda_devices
 else:
     del os.environ["CUDA_VISIBLE_DEVICES"]
 print("[se_extractor] CUDA_VISIBLE_DEVICES restored for PyTorch models.")
 
-# ── Pre-trust silero-vad so torch.hub never prompts interactively ─────────────
+# ── Pre-trust silero-vad ──────────────────────────────────────────────────────
 try:
     import torch.hub as _hub
     _trusted = getattr(_hub, 'trusted_list', None)
@@ -51,19 +31,25 @@ try:
 except Exception:
     pass
 
-# ── Faster-Whisper — ALWAYS CPU/int8 ─────────────────────────────────────────
-model_size = "medium"
+# ── Faster-Whisper model size ─────────────────────────────────────────────────
+# On CPU (HF Spaces free tier): use 'tiny' -- 39 MB, loads in ~2s, good enough
+# for speech segmentation which only needs boundary detection, not transcription.
+# On GPU or overridden via env var: use the specified size (default 'medium').
+# The Dockerfile pre-caches both 'tiny' and 'medium' at build time.
+_is_cpu_only = not torch.cuda.is_available()
+model_size = os.environ.get("WHISPER_MODEL", "tiny" if _is_cpu_only else "medium")
+print(f"[se_extractor] Whisper model size: {model_size} ({'CPU mode' if _is_cpu_only else 'GPU mode'})")
+
 _whisper_model = None
 
 
 def _get_whisper_model():
     global _whisper_model
     if _whisper_model is None:
-        # Extra safety: temporarily hide CUDA while loading the model too
         saved = os.environ.get("CUDA_VISIBLE_DEVICES", None)
         os.environ["CUDA_VISIBLE_DEVICES"] = ""
         try:
-            print("[se_extractor] Loading Whisper model — CPU/int8...")
+            print(f"[se_extractor] Loading Whisper model ({model_size}) -- CPU/int8...")
             _whisper_model = WhisperModel(model_size, device="cpu", compute_type="int8")
             print("[se_extractor] ✓ Whisper model loaded")
         finally:
@@ -75,17 +61,6 @@ def _get_whisper_model():
 
 
 # ── cuDNN-safe extract_se ─────────────────────────────────────────────────────
-#
-# ToneColorConverter.extract_se() does:
-#
-#   device = self.device          # copies the string, e.g. "cuda"
-#   y = y.to(device)              # tensor goes to CUDA
-#   g = self.model.ref_enc(y...)  # Conv2d + weight_norm -> cuDNN
-#
-# We must patch BOTH vc_model.model AND vc_model.device before the call,
-# because extract_se reads `device = self.device` into a local variable —
-# moving just the nn.Module is not enough.
-#
 def safe_extract_se(vc_model, ref_wav_list, se_save_path=None):
     """
     CPU-safe wrapper around vc_model.extract_se().
@@ -149,7 +124,7 @@ def split_audio_whisper(audio_path, audio_name, target_dir='processed'):
         wavs_folder = os.path.join(target_folder, 'wavs')
         os.makedirs(wavs_folder, exist_ok=True)
 
-        # Transcribe at SEGMENT level — each segment is a sentence or phrase.
+        # Transcribe at SEGMENT level -- each segment is a sentence or phrase.
         # word_timestamps=False is the critical change that fixes the bug.
         segments, _ = model.transcribe(audio_path, beam_size=5, word_timestamps=False)
         segments = list(segments)
