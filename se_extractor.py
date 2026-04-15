@@ -95,6 +95,32 @@ def safe_extract_se(vc_model, ref_wav_list, se_save_path=None):
     return result
 
 
+# Short-sample threshold: if total speech is under this many seconds, loop the
+# audio to give the ReferenceEncoder enough material to build a clean embedding.
+# The ref_enc receptive field benefits from at least 6-8 s of input.
+_MIN_SE_SECONDS = 6.0
+_MAX_LOOP_COPIES = 4   # never loop more than 4x (caps at ~24 s for a 6 s clip)
+
+
+def _pad_short_audio(audio: AudioSegment) -> AudioSegment:
+    """
+    If `audio` is shorter than _MIN_SE_SECONDS, tile it (loop) up to
+    _MAX_LOOP_COPIES times until it meets the threshold or the cap is reached.
+    A short cross-fade of 30 ms is applied at each join to avoid click artefacts.
+    """
+    if audio.duration_seconds >= _MIN_SE_SECONDS:
+        return audio
+    xfade = 30  # ms cross-fade at each loop join
+    result = audio
+    copies = 1
+    while result.duration_seconds < _MIN_SE_SECONDS and copies < _MAX_LOOP_COPIES:
+        result = result.append(audio, crossfade=xfade)
+        copies += 1
+    print(f"[se_extractor] short-sample pad: {audio.duration_seconds:.1f}s "
+          f"-> {result.duration_seconds:.1f}s ({copies}x loop)")
+    return result
+
+
 # ── Strategy 1: faster-whisper SENTENCE-level segmentation ───────────────────
 def split_audio_whisper(audio_path, audio_name, target_dir='processed'):
     """
@@ -111,6 +137,10 @@ def split_audio_whisper(audio_path, audio_name, target_dir='processed'):
     Sentence-level segments are typically 2-10s and reliably pass the filter,
     giving the ReferenceEncoder diverse, clean speech chunks to build a
     distinctive speaker embedding from.
+
+    Short-sample improvement: if total accepted speech < _MIN_SE_SECONDS, each
+    segment is individually looped via _pad_short_audio() before export, so the
+    ReferenceEncoder always receives at least 6 s of audio per chunk.
     """
     saved = os.environ.get("CUDA_VISIBLE_DEVICES", None)
     os.environ["CUDA_VISIBLE_DEVICES"] = ""
@@ -118,6 +148,7 @@ def split_audio_whisper(audio_path, audio_name, target_dir='processed'):
         model = _get_whisper_model()
         audio = AudioSegment.from_file(audio_path)
         max_len = len(audio)
+        total_dur = audio.duration_seconds
 
         target_folder = os.path.join(target_dir, audio_name)
         os.makedirs(target_folder, exist_ok=True)
@@ -128,7 +159,12 @@ def split_audio_whisper(audio_path, audio_name, target_dir='processed'):
         # word_timestamps=False is the critical change that fixes the bug.
         segments, _ = model.transcribe(audio_path, beam_size=5, word_timestamps=False)
         segments = list(segments)
-        print(f"[se_extractor] Whisper produced {len(segments)} sentence segment(s)")
+        print(f"[se_extractor] Whisper produced {len(segments)} sentence segment(s) "
+              f"(total dur={total_dur:.1f}s)")
+
+        # For very short clips (< _MIN_SE_SECONDS) Whisper may produce 0 or 1
+        # segments. Lower the floor to 0.5 s so we accept everything audible.
+        min_dur = 0.5 if total_dur < _MIN_SE_SECONDS else 1.0
 
         exported = 0
         for k, seg in enumerate(segments):
@@ -137,14 +173,14 @@ def split_audio_whisper(audio_path, audio_name, target_dir='processed'):
             audio_seg = audio[start_ms:end_ms]
             text = seg.text.strip().replace('...', '')
 
-            # Accept segments 1.0-25s with at least 1 character of transcript.
-            # Duration threshold lowered from 1.5s to catch shorter utterances.
             save = (
-                audio_seg.duration_seconds >= 1.0
+                audio_seg.duration_seconds >= min_dur
                 and audio_seg.duration_seconds <= 25.0
                 and len(text) >= 1
             )
             if save:
+                # Pad short segments so ref_enc gets enough material
+                audio_seg = _pad_short_audio(audio_seg)
                 fname = f"{audio_name}_seg{exported}.wav"
                 audio_seg.export(os.path.join(wavs_folder, fname), format='wav')
                 exported += 1
@@ -204,16 +240,22 @@ def split_audio_vad(audio_path, audio_name, target_dir, split_seconds=10.0):
 
 # ── Strategy 3: whole-file fallback ──────────────────────────────────────────
 def split_audio_whole(audio_path, audio_name, target_dir):
-    """Last resort: treat the entire audio as one segment (max 30 s)."""
+    """Last resort: treat the entire audio as one segment (max 30 s).
+
+    Also pads the clip to _MIN_SE_SECONDS via looping so that even a 2-3 s
+    sample gives the ReferenceEncoder a usable amount of speech.
+    """
     target_folder = os.path.join(target_dir, audio_name)
     wavs_folder = os.path.join(target_folder, 'wavs')
     os.makedirs(wavs_folder, exist_ok=True)
 
     audio = AudioSegment.from_file(audio_path)
-    audio = audio[:30_000]
+    audio = audio[:30_000]          # hard cap at 30 s
+    audio = _pad_short_audio(audio) # loop if < _MIN_SE_SECONDS
     out = os.path.join(wavs_folder, f"{audio_name}_seg0.wav")
     audio.export(out, format='wav')
-    print(f"[se_extractor] whole-file fallback: exported {out}")
+    print(f"[se_extractor] whole-file fallback: exported {out} "
+          f"({audio.duration_seconds:.1f}s)")
     return wavs_folder
 
 

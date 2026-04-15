@@ -1,8 +1,8 @@
 # =============================================================================
-#  Synthetic Voice Studio — .gitignore
+#  Synthetic Voice Studio - .gitignore
 # =============================================================================
 
-# ── Python ────────────────────────────────────────────────────────────────────
+# -- Python -------------------------------------------------------------------
 __pycache__/
 *.py[cod]
 *$py.class
@@ -16,7 +16,7 @@ env/
 ENV/
 .venv/
 
-# ── Type checking / testing ───────────────────────────────────────────────────
+# -- Type checking / testing --------------------------------------------------
 .mypy_cache/
 .pytest_cache/
 .tox/
@@ -24,8 +24,8 @@ htmlcov/
 .coverage
 .coverage.*
 
-# ── Model weights ─────────────────────────────────────────────────────────────
-# Large checkpoint — NOT committed. Downloaded at container startup via
+# -- Model weights ------------------------------------------------------------
+# Large checkpoint - NOT committed. Downloaded at container startup via
 # download_models.py using the HF_CHECKPOINT_REPO environment variable.
 checkpoints_v2/converter/checkpoint.pth
 
@@ -33,7 +33,7 @@ checkpoints_v2/converter/checkpoint.pth
 # available immediately without requiring HF_CHECKPOINT_REPO to be set.
 # Do NOT add checkpoints_v2/base_speakers/ to this ignore list.
 
-# ── Runtime temp directories (auto-generated, never commit contents) ──────────
+# -- Runtime temp directories (auto-generated, never commit contents) ---------
 processed/*
 !processed/.gitkeep
 uploads/*
@@ -41,22 +41,23 @@ uploads/*
 outputs/*
 !outputs/.gitkeep
 
-# ── Emotion wavs (auto-generated at server startup, not committed) ────────────
+# -- Emotion wavs (auto-generated at server startup, not committed) -----------
 emotions/*.wav
 
-# ── Audio / media files ───────────────────────────────────────────────────────
+# -- Audio / media files ------------------------------------------------------
 *.mp3
 *.mp4
 *.ogg
+*.oga
 *.flac
 *.m4a
 *.aac
 *.aiff
 *.wma
-# Note: *.wav is intentionally NOT ignored globally — the .pth and source SE
-# files are not wav. Wav files in uploads/outputs/emotions are covered above.
+# Note: *.wav is intentionally NOT ignored globally - the base speaker SE .pth
+# files are not wav. Wav files in uploads/ outputs/ emotions/ are covered above.
 
-# ── Environment variables ─────────────────────────────────────────────────────
+# -- Environment variables ----------------------------------------------------
 .env
 .env.local
 .env.development
@@ -65,9 +66,9 @@ emotions/*.wav
 frontend/.env
 frontend/.env.local
 frontend/.env.production
-# .env.example IS committed — it documents required variables without secrets
+# .env.example IS committed - it documents required variables without secrets
 
-# ── Node / Frontend build ─────────────────────────────────────────────────────
+# -- Node / Frontend build ----------------------------------------------------
 node_modules/
 frontend/node_modules/
 frontend/dist/
@@ -77,18 +78,18 @@ yarn-debug.log*
 yarn-error.log*
 .eslintcache
 
-# ── Logs ──────────────────────────────────────────────────────────────────────
+# -- Logs ---------------------------------------------------------------------
 *.log
 logs/
 
-# ── OS generated ──────────────────────────────────────────────────────────────
+# -- OS generated -------------------------------------------------------------
 .DS_Store
 .DS_Store?
 ._*
 Thumbs.db
 desktop.ini
 
-# ── IDEs & Editors ────────────────────────────────────────────────────────────
+# -- IDEs & Editors -----------------------------------------------------------
 .vscode/
 .idea/
 *.swp
@@ -96,15 +97,16 @@ desktop.ini
 *~
 .vs/
 
-# ── Dev tooling — local only, not relevant to collaborators or deployment ─────
-# Claude MCP configuration (machine-specific)
+# -- Dev tooling (local only, not relevant to collaborators or deployment) ----
+# Claude MCP configuration (machine-specific paths)
 .mcp.json
-# Claude agent skills (IDE plugin artifacts)
+# Claude agent/session artifacts
 .agent/
+.claude/
 # Docker compose local overrides
 docker-compose.override.yml
 
-# ── Trash / backup files (prefixed to mark for deletion) ─────────────────────
+# -- Trash / backup / superseded files ----------------------------------------
 .trash_*
 *.bak
 *.orig
@@ -112,19 +114,28 @@ docker-compose.override.yml
 tmp/
 temp/
 
-# ── Superseded files (kept locally for reference, not part of the codebase) ───
-# se_extractor.py is now the canonical file at OpenVoice/openvoice/se_extractor.py
+# Superseded extractor - kept locally for reference only
 se_extractor_patched.py
 
-# ── OpenVoice subdir artifacts ────────────────────────────────────────────────
+# Local-only utility scripts - not needed by collaborators or deployment
+cleanup_cache.bat
+cleanup_local.bat
+
+# Silero VAD pre-cache helper - only used during Docker build / local dev setup
+cache_silero.py
+
+# Validator script - dev-only diagnostic, not part of the server
+validator.py
+
+# -- OpenVoice subdir artifacts -----------------------------------------------
 OpenVoice/**/__pycache__/
 OpenVoice/**/*.pyc
 OpenVoice/**/*.egg-info/
-# OpenVoice has its own .git — exclude it so our repo doesn't treat it as
+# OpenVoice has its own .git - exclude it so our repo doesn't treat it as
 # a submodule (we vendor the source directly and patch se_extractor.py)
 OpenVoice/.git/
 OpenVoice/.gitignore
 
-# ── HF / torch cache (auto-downloaded at runtime) ────────────────────────────
+# -- HF / torch cache (auto-downloaded at runtime) ----------------------------
 .cache/
 huggingface/

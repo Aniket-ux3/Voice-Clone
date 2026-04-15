@@ -151,7 +151,7 @@ _BACKEND_ERROR_MAP = [
     ("tts generation failed",        "Failed to synthesize speech. Please try a shorter script."),
     ("voice conversion failed",      "Voice conversion encountered an error. Try re-uploading the reference audio."),
     ("denoising failed",             "Audio post-processing failed."),
-    ("watermark",                    "Watermark embedding failed. Your audio may still be usable."),
+    ("watermark",                    "Watermark embedding failed. Please try again."),
     ("model loading failed",         "AI models are still initialising. Please wait a moment and try again."),
     ("failed to preprocess",         "Could not read the uploaded audio file. Please try a WAV or MP3 under 50 MB."),
     ("out of memory",                "The server ran out of memory. Please try a shorter script or smaller audio file."),
@@ -178,8 +178,13 @@ def safe_error(raw: str, fallback: str = "An internal error occurred. Please try
 
 # ── Audio I/O helpers ─────────────────────────────────────────────────────────
 
-def preprocess_audio(input_path, output_path):
-    """Convert any audio to 22050 Hz mono WAV."""
+def preprocess_audio(input_path, output_path, normalize=True):
+    """Convert any audio to 22050 Hz mono WAV.
+
+    normalize=True  → peak-normalize to 1.0 (used for generation / SE extraction)
+    normalize=False → preserve original amplitude (used for authentication so the
+                      AudioSeal watermark signal is not rescaled and stays detectable)
+    """
     try:
         waveform, sr = torchaudio_load(input_path)
         if waveform.shape[0] > 1:
@@ -187,9 +192,10 @@ def preprocess_audio(input_path, output_path):
         if sr != TARGET_SR:
             resampler = T.Resample(orig_freq=sr, new_freq=TARGET_SR)
             waveform = resampler(waveform)
-        peak = torch.max(torch.abs(waveform))
-        if peak > 0:
-            waveform = waveform / peak
+        if normalize:
+            peak = torch.max(torch.abs(waveform))
+            if peak > 0:
+                waveform = waveform / peak
         torchaudio_save(output_path, waveform, TARGET_SR)
         return output_path
     except Exception as e:
@@ -497,7 +503,9 @@ def generate_voice():
             # ── Emotion style blending ────────────────────────────────────────
             # Use safe_extract_se directly -- bypasses Whisper/VAD segmentation
             # which is inappropriate for short emotion reference clips.
-            emotion_wav = os.path.join('emotions', f'{emotion}.wav')
+            emotion_wav = os.path.join('/tmp/voice_studio_emotions', f'{emotion}.wav')
+            if not _is_valid_audio(emotion_wav):
+                emotion_wav = os.path.join('emotions', f'{emotion}.wav')
             final_tgt_se = target_se
             if emotion != 'neutral' and _is_valid_audio(emotion_wav):
                 try:
@@ -518,17 +526,32 @@ def generate_voice():
                     print(f"[{request_id}] WARNING: emotion blending skipped ({emo_err})")
                     final_tgt_se = target_se
 
-            # tau = posterior encoder noise scale (reparameterization std dev).
-            # 0.3 gives clean, deterministic conversion. Higher values add
-            # distortion -- they do NOT increase target-voice influence.
+            # ── Adaptive tau based on SE quality ─────────────────────────────
+            # tau is the posterior encoder noise scale.
+            # For short/low-quality samples the extracted SE has lower norm
+            # (less confident speaker identity). Using a lower tau in this case
+            # keeps conversion clean and avoids introducing distortion that
+            # fights the weak identity signal. For high-quality long samples
+            # tau=0.3 is fine and gives the best voice similarity.
+            se_norm = torch.norm(target_se).item()
+            if se_norm < 7.0:
+                tau = 0.1   # very short/quiet sample -- prioritise cleanliness
+                print(f"[{request_id}] SE norm={se_norm:.3f} (low) -> tau={tau} (clean mode)")
+            elif se_norm < 9.0:
+                tau = 0.2   # moderate quality sample
+                print(f"[{request_id}] SE norm={se_norm:.3f} (medium) -> tau={tau}")
+            else:
+                tau = 0.3   # good quality sample -- standard setting
+                print(f"[{request_id}] SE norm={se_norm:.3f} (good) -> tau={tau}")
+
             converter.convert(
                 audio_src_path=base_path,
                 src_se=source_se,
                 tgt_se=final_tgt_se,
                 output_path=raw_output,
-                tau=0.3,
+                tau=tau,
             )
-            print(f"[{request_id}] ✓ Voice converted (tau=0.3)")
+            print(f"[{request_id}] ✓ Voice converted (tau={tau})")
         except Exception as e:
             print(f"[{request_id}] ERROR in voice conversion: {e}")
             traceback.print_exc()
@@ -548,27 +571,52 @@ def generate_voice():
                 print(f"[{request_id}] WARNING: Denoising skipped ({e})")
 
         # ── Watermarking ──────────────────────────────────────────────────────
-        # Watermarking is skipped on CPU — AudioSeal runs 10+ sequential neural
-        # network passes per second of audio, which takes 3-5 min on CPU and
-        # causes client timeouts. It is a provenance feature only and does not
-        # affect voice cloning quality. On GPU it runs in <1s.
+        # AudioSeal native rate = 16 kHz. Strategy:
+        #   1. Load raw_output and move entirely to CPU.
+        #   2. Temporarily move watermarker to CPU (avoids CUDA/CPU tensor mismatch).
+        #   3. Embed watermark at 16 kHz on CPU.
+        #   4. Resample watermark back to original SR and trim/pad to exact
+        #      original sample count (fixes off-by-a-few resampler rounding).
+        #   5. Add to original waveform and save.
+        #   6. Restore watermarker to `device` for future calls.
+        # Watermarking is MANDATORY -- failure raises so the caller gets a 500,
+        # not a silently un-watermarked file.
         final_path = os.path.join(app.config['OUTPUT_FOLDER'], f"{request_id}_final.wav")
-        if device != 'cpu':
-            print(f"[{request_id}] Embedding watermark...")
-            try:
-                wav, sr = torchaudio_load(raw_output)
-                wav = wav.to(device)
-                with torch.no_grad():
-                    wm = watermarker.get_watermark(wav.unsqueeze(0))  # sr arg removed: deprecated in AudioSeal 0.2+
-                    final_audio = wav + wm.squeeze(0)
-                torchaudio_save(final_path, final_audio.cpu(), sr)
-                print(f"[{request_id}] ✓ Watermark embedded")
-            except Exception as e:
-                print(f"[{request_id}] WARNING: Watermarking failed ({e}), using raw output")
-                shutil.copy2(raw_output, final_path)
+        print(f"[{request_id}] Embedding watermark...")
+        wav, sr = torchaudio_load(raw_output)
+        if wav.shape[0] > 1:
+            wav = torch.mean(wav, dim=0, keepdim=True)
+        wav = wav.cpu()  # guaranteed CPU from here on
+        orig_len = wav.shape[1]  # remember exact original sample count
+
+        # Resample to 16 kHz for AudioSeal
+        if sr != 16000:
+            wav_16k = T.Resample(orig_freq=sr, new_freq=16000)(wav)
         else:
-            print(f"[{request_id}] Watermarking skipped (CPU mode — would cause timeout)")
-            shutil.copy2(raw_output, final_path)
+            wav_16k = wav.clone()
+
+        # Temporarily pin watermarker to CPU
+        watermarker.cpu()
+        with torch.no_grad():
+            wm_16k = watermarker.get_watermark(wav_16k.unsqueeze(0)).squeeze(0)
+        watermarker.to(device)  # restore to GPU/CPU for future calls
+
+        # Resample watermark back to original SR
+        if sr != 16000:
+            wm = T.Resample(orig_freq=16000, new_freq=sr)(wm_16k)
+        else:
+            wm = wm_16k
+
+        # Trim or zero-pad to match exact original length (resampler rounding fix)
+        if wm.shape[1] > orig_len:
+            wm = wm[:, :orig_len]
+        elif wm.shape[1] < orig_len:
+            wm = F.pad(wm, (0, orig_len - wm.shape[1]))
+
+        final_audio = wav + wm
+        torchaudio_save(final_path, final_audio, sr)
+        print(f"[{request_id}] ✓ Watermark embedded at 16kHz, restored to {sr}Hz "
+              f"(len={orig_len}, wm_len after trim={wm.shape[1]})")
 
         # ── Cleanup ───────────────────────────────────────────────────────────
         time.sleep(0.3)
@@ -633,7 +681,9 @@ def authenticate_voice():
 
         wav_path = os.path.join(app.config['UPLOAD_FOLDER'], f"{request_id}_verify.wav")
         temp_paths.append(wav_path)
-        if preprocess_audio(input_path, wav_path) is None:
+        # normalize=False preserves the watermark signal amplitude exactly as saved.
+        # Peak-normalizing here would rescale the waveform and weaken detection.
+        if preprocess_audio(input_path, wav_path, normalize=False) is None:
             return jsonify({'error': 'Failed to preprocess audio'}), 500
 
         models   = load_models()
@@ -642,10 +692,20 @@ def authenticate_voice():
         wav, sr = torchaudio_load(wav_path)
         if wav.shape[0] > 1:
             wav = torch.mean(wav, dim=0, keepdim=True)
-        wav = wav.to(device)
+        # Resample to 16kHz for AudioSeal detection
+        if sr != 16000:
+            resampler = T.Resample(orig_freq=sr, new_freq=16000)
+            wav_16k = resampler(wav)
+        else:
+            wav_16k = wav
+        wav_16k = wav_16k.cpu()  # detector always on CPU to match watermarker strategy
 
         with torch.no_grad():
-            result, _ = detector.detect_watermark(wav.unsqueeze(0), sr)
+            # Temporarily move detector to CPU (same device-consistency strategy
+            # as the watermarker in generate_voice)
+            detector.cpu()
+            result, _ = detector.detect_watermark(wav_16k.unsqueeze(0))
+            detector.to(device)
             prob      = result.item()
 
         is_original = prob <= 0.5
@@ -709,10 +769,9 @@ def _generate_emotion_wavs():
         'jolly':   (0.5, 0.9, 1.0, 1.20),
         'anxious': (0.3, 0.7, 0.9, 1.05),
     }
-    REF_TEXT = (
-        "The quick brown fox jumps over the lazy dog. "
-        "She sells seashells by the seashore."
-    )
+    # Short text only -- we need a valid WAV for SE shape, not a long recording.
+    # Shorter = faster on CPU (~2s per wav instead of ~8s at startup).
+    REF_TEXT = "Hello, this is a voice sample."
 
     _spk2id = tts.hps.data.spk2id
     TTS_SPEAKER = None
@@ -724,11 +783,21 @@ def _generate_emotion_wavs():
         TTS_SPEAKER = list(_spk2id.keys())[0]  # HParams.keys() is safe; iter() is not
     speaker_id = _spk2id[TTS_SPEAKER]
 
-    os.makedirs('emotions', exist_ok=True)
+    # Use /tmp/emotions so wavs survive container restarts within the same
+    # HF Spaces instance (ephemeral app dir, but /tmp persists same container).
+    EMOTION_DIR = '/tmp/voice_studio_emotions'
+    os.makedirs(EMOTION_DIR, exist_ok=True)
+    # Also keep a symlink at emotions/ so the rest of the code finds them.
+    if not os.path.islink('emotions') and not os.path.isdir('emotions'):
+        os.symlink(EMOTION_DIR, 'emotions')
+    elif os.path.isdir('emotions') and not os.path.islink('emotions'):
+        # Plain dir exists (local dev) -- just use it as-is, no symlink needed.
+        EMOTION_DIR = 'emotions'
+
     regenerated = []
 
     for emotion, (sdp, ns, nsw, spd) in EMOTION_PROSODY.items():
-        wav_path = os.path.join('emotions', f'{emotion}.wav')
+        wav_path = os.path.join(EMOTION_DIR, f'{emotion}.wav')
         if _is_valid_audio(wav_path):
             print(f"[BOOT] Emotion wav OK: {emotion}")
             continue
