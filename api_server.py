@@ -308,11 +308,16 @@ def load_models():
                 tts_model = TTS(language='EN', device=device)
                 print("[INFO] ✓ MeloTTS EN loaded (EN-Default will be used)")
 
-            watermarker = AudioSeal.load_generator("audioseal_wm_16bits").to(device).eval()
-            print("[INFO] ✓ AudioSeal watermarker loaded")
+            # AudioSeal always runs on CPU regardless of the main device.
+            # Moving it to GPU and back on every request causes a hang on HF
+            # Spaces (CPU-only) because the second .cpu() call re-initialises
+            # internal BLAS state and blocks indefinitely. Keeping it on CPU
+            # permanently is safe: AudioSeal is tiny (56 MB) and fast on CPU.
+            watermarker = AudioSeal.load_generator("audioseal_wm_16bits").cpu().eval()
+            print("[INFO] ✓ AudioSeal watermarker loaded (CPU-pinned)")
 
-            detector = AudioSeal.load_detector("audioseal_detector_16bits").to(device).eval()
-            print("[INFO] ✓ AudioSeal detector loaded")
+            detector = AudioSeal.load_detector("audioseal_detector_16bits").cpu().eval()
+            print("[INFO] ✓ AudioSeal detector loaded (CPU-pinned)")
 
             _models_cache = {
                 'converter':   converter,
@@ -571,43 +576,37 @@ def generate_voice():
                 print(f"[{request_id}] WARNING: Denoising skipped ({e})")
 
         # ── Watermarking ──────────────────────────────────────────────────────
-        # AudioSeal native rate = 16 kHz. Strategy:
-        #   1. Load raw_output and move entirely to CPU.
-        #   2. Temporarily move watermarker to CPU (avoids CUDA/CPU tensor mismatch).
-        #   3. Embed watermark at 16 kHz on CPU.
-        #   4. Resample watermark back to original SR and trim/pad to exact
-        #      original sample count (fixes off-by-a-few resampler rounding).
-        #   5. Add to original waveform and save.
-        #   6. Restore watermarker to `device` for future calls.
-        # Watermarking is MANDATORY -- failure raises so the caller gets a 500,
-        # not a silently un-watermarked file.
+        # AudioSeal native rate = 16 kHz. The watermarker is permanently
+        # CPU-pinned (loaded that way at startup) -- no device moves at runtime.
+        # Pipeline:
+        #   1. Load audio entirely on CPU.
+        #   2. Resample to 16 kHz.
+        #   3. Get watermark signal (watermarker is already on CPU).
+        #   4. Resample watermark back to original SR.
+        #   5. Trim/pad to exact original length (resampler rounding fix).
+        #   6. Add and save.
         final_path = os.path.join(app.config['OUTPUT_FOLDER'], f"{request_id}_final.wav")
         print(f"[{request_id}] Embedding watermark...")
         wav, sr = torchaudio_load(raw_output)
         if wav.shape[0] > 1:
             wav = torch.mean(wav, dim=0, keepdim=True)
-        wav = wav.cpu()  # guaranteed CPU from here on
-        orig_len = wav.shape[1]  # remember exact original sample count
+        wav = wav.cpu()
+        orig_len = wav.shape[1]
 
-        # Resample to 16 kHz for AudioSeal
         if sr != 16000:
             wav_16k = T.Resample(orig_freq=sr, new_freq=16000)(wav)
         else:
             wav_16k = wav.clone()
 
-        # Temporarily pin watermarker to CPU
-        watermarker.cpu()
+        # watermarker is permanently on CPU -- no .cpu()/.to() calls here
         with torch.no_grad():
             wm_16k = watermarker.get_watermark(wav_16k.unsqueeze(0)).squeeze(0)
-        watermarker.to(device)  # restore to GPU/CPU for future calls
 
-        # Resample watermark back to original SR
         if sr != 16000:
             wm = T.Resample(orig_freq=16000, new_freq=sr)(wm_16k)
         else:
             wm = wm_16k
 
-        # Trim or zero-pad to match exact original length (resampler rounding fix)
         if wm.shape[1] > orig_len:
             wm = wm[:, :orig_len]
         elif wm.shape[1] < orig_len:
@@ -615,8 +614,8 @@ def generate_voice():
 
         final_audio = wav + wm
         torchaudio_save(final_path, final_audio, sr)
-        print(f"[{request_id}] ✓ Watermark embedded at 16kHz, restored to {sr}Hz "
-              f"(len={orig_len}, wm_len after trim={wm.shape[1]})")
+        print(f"[{request_id}] ✓ Watermark embedded (16kHz->{ sr}Hz, "
+              f"len={orig_len})")
 
         # ── Cleanup ───────────────────────────────────────────────────────────
         time.sleep(0.3)
@@ -698,14 +697,11 @@ def authenticate_voice():
             wav_16k = resampler(wav)
         else:
             wav_16k = wav
-        wav_16k = wav_16k.cpu()  # detector always on CPU to match watermarker strategy
+        wav_16k = wav_16k.cpu()  # detector is CPU-pinned at startup
 
+        # detector is permanently on CPU -- no .cpu()/.to() calls
         with torch.no_grad():
-            # Temporarily move detector to CPU (same device-consistency strategy
-            # as the watermarker in generate_voice)
-            detector.cpu()
             result, _ = detector.detect_watermark(wav_16k.unsqueeze(0))
-            detector.to(device)
             prob      = result.item()
 
         is_original = prob <= 0.5
