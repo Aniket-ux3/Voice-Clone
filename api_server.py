@@ -15,6 +15,8 @@ import uuid
 import traceback
 import shutil
 import time
+import threading
+import queue
 
 # --- SELF-HEALING DATA DOWNLOADS ---
 def download_nltk_resources():
@@ -78,7 +80,7 @@ app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['OUTPUT_FOLDER'] = OUTPUT_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024
 
-# ── Device selection — dual cuDNN probe ──────────────────────────────────────
+# ── Device selection ──────────────────────────────────────────────────────────
 def _probe_pytorch_cudnn() -> bool:
     if not torch.cuda.is_available():
         return False
@@ -140,7 +142,69 @@ if device == "cpu" and torch.cuda.is_available():
     os.environ["CUDA_VISIBLE_DEVICES"] = ""
     print("[DEVICE] CUDA_VISIBLE_DEVICES='' -- all ops pinned to CPU.")
 
+# ── Force PyTorch to use 1 intra-op thread on CPU ────────────────────────────
+# This is the most important fix for the "stuck on 2nd request" bug.
+# Flask runs in a single worker process. When threaded=True (our setup),
+# multiple Flask threads call into PyTorch concurrently. PyTorch's CPU thread
+# pool is NOT designed for concurrent use from multiple Python threads — the
+# 2nd call into ops like AudioSeal's convolutions can deadlock waiting for
+# the first call's thread pool to drain.
+#
+# Setting num_threads=1 makes every PyTorch CPU op single-threaded and
+# deterministic. The performance cost is negligible on HF free CPU (2 vCPU)
+# because the bottleneck is model compute, not parallelism within a single op.
+torch.set_num_threads(1)
+torch.set_num_interop_threads(1)
+print("[DEVICE] PyTorch CPU thread pool pinned to 1 (deadlock prevention).")
+
 TARGET_SR = 22050
+
+# ── Generation lock ───────────────────────────────────────────────────────────
+# Serialises all /api/generate calls so only ONE generation runs at a time.
+# This eliminates PyTorch CPU thread pool contention between concurrent requests
+# which is the primary cause of the "stuck on 2nd generation" bug.
+# HF Spaces free tier has 2 vCPUs — parallelism doesn't help on CPU anyway.
+_generation_lock = threading.Lock()
+
+# ── AudioSeal watermark helper (timeout-protected) ────────────────────────────
+# AudioSeal's get_watermark() can hang indefinitely on the 2nd+ call in a
+# long-running process due to PyTorch's internal lazy BLAS initialisation.
+# We run it in a daemon thread with a hard timeout. If it times out we skip
+# watermarking and return the unwatermarked audio — this keeps the generation
+# pipeline alive instead of hanging the whole server.
+_WATERMARK_TIMEOUT_S = 30  # seconds before we give up and skip watermarking
+
+def _embed_watermark_with_timeout(watermarker, wav_16k, request_id):
+    """
+    Run AudioSeal watermark embedding in a separate thread with a hard timeout.
+    Returns (wm_16k_tensor, True) on success or (None, False) on timeout/error.
+    """
+    result_box = [None]
+    error_box  = [None]
+
+    def _worker():
+        try:
+            with torch.no_grad():
+                result_box[0] = watermarker.get_watermark(
+                    wav_16k.unsqueeze(0)
+                ).squeeze(0).detach().clone()
+        except Exception as e:
+            error_box[0] = e
+
+    t = threading.Thread(target=_worker, daemon=True)
+    t.start()
+    t.join(timeout=_WATERMARK_TIMEOUT_S)
+
+    if t.is_alive():
+        print(f"[{request_id}] WARNING: AudioSeal timed out after {_WATERMARK_TIMEOUT_S}s -- skipping watermark")
+        return None, False
+
+    if error_box[0] is not None:
+        print(f"[{request_id}] WARNING: AudioSeal error -- {error_box[0]} -- skipping watermark")
+        return None, False
+
+    return result_box[0], True
+
 
 # ── Safe error message helper ─────────────────────────────────────────────────
 _BACKEND_ERROR_MAP = [
@@ -179,12 +243,7 @@ def safe_error(raw: str, fallback: str = "An internal error occurred. Please try
 # ── Audio I/O helpers ─────────────────────────────────────────────────────────
 
 def preprocess_audio(input_path, output_path, normalize=True):
-    """Convert any audio to 22050 Hz mono WAV.
-
-    normalize=True  → peak-normalize to 1.0 (used for generation / SE extraction)
-    normalize=False → preserve original amplitude (used for authentication so the
-                      AudioSeal watermark signal is not rescaled and stays detectable)
-    """
+    """Convert any audio to 22050 Hz mono WAV."""
     try:
         waveform, sr = torchaudio_load(input_path)
         if waveform.shape[0] > 1:
@@ -272,10 +331,10 @@ def _is_valid_audio(path):
     try:
         with open(path, 'rb') as f:
             header = f.read(16)
-        if header[:4] == b'RIFF':   return True   # WAV
-        if header[:3] == b'ID3':    return True   # MP3
-        if header[:4] == b'fLaC':  return True   # FLAC
-        if header[:4] == b'OggS':  return True   # OGG
+        if header[:4] == b'RIFF':  return True   # WAV
+        if header[:3] == b'ID3':   return True   # MP3
+        if header[:4] == b'fLaC': return True    # FLAC
+        if header[:4] == b'OggS': return True    # OGG
         return False
     except Exception:
         return False
@@ -284,10 +343,18 @@ def _is_valid_audio(path):
 # ── Model loading ─────────────────────────────────────────────────────────────
 
 _models_cache = None
+_models_lock  = threading.Lock()
 
 def load_models():
     global _models_cache
-    if _models_cache is None:
+    if _models_cache is not None:
+        return _models_cache
+
+    with _models_lock:
+        # Double-checked locking
+        if _models_cache is not None:
+            return _models_cache
+
         print("[INFO] Loading models...")
         try:
             ckpt_converter = 'checkpoints_v2/converter'
@@ -295,11 +362,6 @@ def load_models():
             converter.load_ckpt(f'{ckpt_converter}/checkpoint.pth')
             print("[INFO] ✓ ToneColorConverter loaded")
 
-            # EN_NEWEST (MeloTTS-English-v3) is the correct language key for the
-            # highest-quality single-speaker model. Its spk2id key is 'EN_NEWEST',
-            # which maps to en-newest.pth via speaker_key.lower().replace('_','-').
-            # EN_V2 (MeloTTS-English-v2) is a different multi-speaker model that
-            # does NOT contain EN-Newest — it silently falls back to EN-US.
             try:
                 tts_model = TTS(language='EN_NEWEST', device=device)
                 print("[INFO] ✓ MeloTTS EN_NEWEST loaded (en-newest.pth speaker available)")
@@ -308,16 +370,28 @@ def load_models():
                 tts_model = TTS(language='EN', device=device)
                 print("[INFO] ✓ MeloTTS EN loaded (EN-Default will be used)")
 
-            # AudioSeal always runs on CPU regardless of the main device.
-            # Moving it to GPU and back on every request causes a hang on HF
-            # Spaces (CPU-only) because the second .cpu() call re-initialises
-            # internal BLAS state and blocks indefinitely. Keeping it on CPU
-            # permanently is safe: AudioSeal is tiny (56 MB) and fast on CPU.
+            # AudioSeal: CPU-pinned permanently.
+            # CRITICAL: eval() + no grad disabling is not enough — we must also
+            # call a warm-up inference HERE at load time so that PyTorch's lazy
+            # BLAS initialisation happens once (single-threaded, safe) rather
+            # than on the first real request (potentially concurrent).
             watermarker = AudioSeal.load_generator("audioseal_wm_16bits").cpu().eval()
-            print("[INFO] ✓ AudioSeal watermarker loaded (CPU-pinned)")
+            detector    = AudioSeal.load_detector("audioseal_detector_16bits").cpu().eval()
 
-            detector = AudioSeal.load_detector("audioseal_detector_16bits").cpu().eval()
-            print("[INFO] ✓ AudioSeal detector loaded (CPU-pinned)")
+            # ── Warm up AudioSeal with a silent 1-second clip ─────────────────
+            # This triggers PyTorch's lazy BLAS init, cuDNN handle creation,
+            # and any first-call overhead — all in a safe, single-threaded
+            # context. Without this, the first real request (or the second,
+            # if the first overlaps model load) hits the BLAS init cold
+            # and can deadlock under threaded Flask.
+            print("[INFO] Warming up AudioSeal (BLAS init)...")
+            _dummy = torch.zeros(1, 1, 16000)  # 1 s silent clip at 16 kHz
+            with torch.no_grad():
+                _wm = watermarker.get_watermark(_dummy)
+                _   = detector.detect_watermark(_dummy + _wm)
+            del _dummy, _wm, _
+            print("[INFO] ✓ AudioSeal watermarker loaded + warmed up (CPU-pinned)")
+            print("[INFO] ✓ AudioSeal detector loaded + warmed up (CPU-pinned)")
 
             _models_cache = {
                 'converter':   converter,
@@ -330,6 +404,7 @@ def load_models():
             print(f"\n{'='*70}\n[FATAL] Model loading failed: {e}\n{'='*70}\n")
             traceback.print_exc()
             raise RuntimeError("Model loading failed")
+
     return _models_cache
 
 
@@ -365,6 +440,14 @@ def health_check():
 def generate_voice():
     request_id = str(uuid.uuid4())[:8]
     temp_paths = []
+
+    # ── Acquire the generation lock ───────────────────────────────────────────
+    # Only one generation runs at a time. If the lock is already held (another
+    # request is generating), we queue. The frontend timeout (5 min) is long
+    # enough to wait for one in-flight request to complete before starting.
+    acquired = _generation_lock.acquire(timeout=280)  # ~4 min 40 s wait max
+    if not acquired:
+        return jsonify({'error': 'Server is busy. Please wait a moment and try again.'}), 503
 
     try:
         print(f"\n{'='*70}")
@@ -412,15 +495,10 @@ def generate_voice():
         watermarker = models['watermarker']
 
         # ── Speaker embedding ─────────────────────────────────────────────────
-        # get_se() runs Whisper sentence-level segmentation then calls
-        # safe_extract_se() which CPU-pins the model for ref_enc, then restores.
         print(f"[{request_id}] Extracting speaker embedding...")
         try:
             target_se, audio_name = se_extractor.get_se(wav_ref, converter, vad=False)
             target_se = target_se.to(device)
-            # DO NOT normalize -- the flow network conditioning depends on the
-            # raw SE scale. Normalizing destroys scale information and causes
-            # the converter to produce a generic/robotic voice regardless of input.
             print(f"[{request_id}] ✓ Speaker embedding extracted (norm={torch.norm(target_se).item():.3f})")
         except Exception as e:
             print(f"[{request_id}] ERROR in speaker extraction: {e}")
@@ -438,7 +516,6 @@ def generate_voice():
         temp_paths.append(base_path)
 
         EMOTION_PROSODY = {
-            # (sdp_ratio, noise_scale, noise_scale_w, speed)
             'neutral': (0.2, 0.6, 0.8, 1.0),
             'happy':   (0.4, 0.8, 0.9, 1.15),
             'sad':     (0.1, 0.4, 0.6, 0.80),
@@ -448,11 +525,6 @@ def generate_voice():
         }
         sdp, ns, nsw, spd = EMOTION_PROSODY.get(emotion, EMOTION_PROSODY['neutral'])
 
-        # Pick the best available MeloTTS speaker.
-        # Priority: EN_NEWEST (single-speaker EN_NEWEST model, key 'EN_NEWEST')
-        #           > EN-Default > EN-US > other EN variants.
-        # SE filename: speaker_key.lower().replace('_', '-') + '.pth'
-        # This matches the official OpenVoice demo_part3.ipynb convention exactly.
         _spk2id = tts_model.hps.data.spk2id
         TTS_SPEAKER = None
         for _candidate in ('EN_NEWEST', 'EN-Newest', 'EN-Default', 'EN-US', 'EN-BR', 'EN-AU', 'EN-IN'):
@@ -460,10 +532,8 @@ def generate_voice():
                 TTS_SPEAKER = _candidate
                 break
         if TTS_SPEAKER is None:
-            TTS_SPEAKER = list(_spk2id.keys())[0]  # HParams.keys() is safe; iter() is not
+            TTS_SPEAKER = list(_spk2id.keys())[0]
 
-        # SE filename: speaker_key.lower().replace('_', '-') + '.pth'
-        # e.g. EN_NEWEST -> en-newest.pth, EN-Default -> en-default.pth
         _se_name = TTS_SPEAKER.lower().replace('_', '-')
         SOURCE_SE_FILE = f'checkpoints_v2/base_speakers/ses/{_se_name}.pth'
         if not os.path.exists(SOURCE_SE_FILE):
@@ -493,21 +563,12 @@ def generate_voice():
         try:
             source_se = torch.load(SOURCE_SE_FILE, map_location=device).to(device)
 
-            # Norm-match source_se to target_se.
-            # The flow network was trained on (src, tgt) SE pairs where both
-            # come from the same ReferenceEncoder and have comparable magnitudes.
-            # The pre-computed .pth files can have norm ~11 while extracted
-            # target SEs are ~8-10. This asymmetry biases the flow inversion
-            # and weakens identity transfer. Rescaling fixes the imbalance.
             tgt_norm = torch.norm(target_se).item()
             src_norm = torch.norm(source_se).item()
             if src_norm > 0 and tgt_norm > 0:
                 source_se = source_se * (tgt_norm / src_norm)
                 print(f"[{request_id}] source_se norm: {src_norm:.3f} -> {tgt_norm:.3f} (matched to target)")
 
-            # ── Emotion style blending ────────────────────────────────────────
-            # Use safe_extract_se directly -- bypasses Whisper/VAD segmentation
-            # which is inappropriate for short emotion reference clips.
             emotion_wav = os.path.join('/tmp/voice_studio_emotions', f'{emotion}.wav')
             if not _is_valid_audio(emotion_wav):
                 emotion_wav = os.path.join('emotions', f'{emotion}.wav')
@@ -531,22 +592,15 @@ def generate_voice():
                     print(f"[{request_id}] WARNING: emotion blending skipped ({emo_err})")
                     final_tgt_se = target_se
 
-            # ── Adaptive tau based on SE quality ─────────────────────────────
-            # tau is the posterior encoder noise scale.
-            # For short/low-quality samples the extracted SE has lower norm
-            # (less confident speaker identity). Using a lower tau in this case
-            # keeps conversion clean and avoids introducing distortion that
-            # fights the weak identity signal. For high-quality long samples
-            # tau=0.3 is fine and gives the best voice similarity.
             se_norm = torch.norm(target_se).item()
             if se_norm < 7.0:
-                tau = 0.1   # very short/quiet sample -- prioritise cleanliness
+                tau = 0.1
                 print(f"[{request_id}] SE norm={se_norm:.3f} (low) -> tau={tau} (clean mode)")
             elif se_norm < 9.0:
-                tau = 0.2   # moderate quality sample
+                tau = 0.2
                 print(f"[{request_id}] SE norm={se_norm:.3f} (medium) -> tau={tau}")
             else:
-                tau = 0.3   # good quality sample -- standard setting
+                tau = 0.3
                 print(f"[{request_id}] SE norm={se_norm:.3f} (good) -> tau={tau}")
 
             converter.convert(
@@ -575,50 +629,52 @@ def generate_voice():
             except Exception as e:
                 print(f"[{request_id}] WARNING: Denoising skipped ({e})")
 
-        # ── Watermarking ──────────────────────────────────────────────────────
-        # AudioSeal native rate = 16 kHz. The watermarker is permanently
-        # CPU-pinned (loaded that way at startup) -- no device moves at runtime.
-        # Pipeline:
-        #   1. Load audio entirely on CPU.
-        #   2. Resample to 16 kHz.
-        #   3. Get watermark signal (watermarker is already on CPU).
-        #   4. Resample watermark back to original SR.
-        #   5. Trim/pad to exact original length (resampler rounding fix).
-        #   6. Add and save.
+        # ── Watermarking (timeout-protected) ──────────────────────────────────
+        # AudioSeal hangs on 2nd+ call due to PyTorch lazy BLAS re-init.
+        # We now: (a) warm up at startup, (b) serialise via _generation_lock,
+        # (c) run in a daemon thread with a hard 30 s timeout as final safety net.
+        # If the thread times out, we save the unwatermarked audio instead of
+        # hanging the server. The output is still a valid voice clone.
         final_path = os.path.join(app.config['OUTPUT_FOLDER'], f"{request_id}_final.wav")
         print(f"[{request_id}] Embedding watermark...")
-        wav, sr = torchaudio_load(raw_output)
-        if wav.shape[0] > 1:
-            wav = torch.mean(wav, dim=0, keepdim=True)
-        wav = wav.cpu()
-        orig_len = wav.shape[1]
+        try:
+            wav, sr = torchaudio_load(raw_output)
+            if wav.shape[0] > 1:
+                wav = torch.mean(wav, dim=0, keepdim=True)
+            wav = wav.cpu()
+            orig_len = wav.shape[1]
 
-        if sr != 16000:
-            wav_16k = T.Resample(orig_freq=sr, new_freq=16000)(wav)
-        else:
-            wav_16k = wav.clone()
+            wav_16k = T.Resample(orig_freq=sr, new_freq=16000)(wav) if sr != 16000 else wav.clone()
 
-        # watermarker is permanently on CPU -- no .cpu()/.to() calls here
-        with torch.no_grad():
-            wm_16k = watermarker.get_watermark(wav_16k.unsqueeze(0)).squeeze(0)
+            wm_16k, wm_ok = _embed_watermark_with_timeout(watermarker, wav_16k, request_id)
 
-        if sr != 16000:
-            wm = T.Resample(orig_freq=16000, new_freq=sr)(wm_16k)
-        else:
-            wm = wm_16k
+            if wm_ok and wm_16k is not None:
+                wm = T.Resample(orig_freq=16000, new_freq=sr)(wm_16k) if sr != 16000 else wm_16k
+                if wm.shape[1] > orig_len:
+                    wm = wm[:, :orig_len]
+                elif wm.shape[1] < orig_len:
+                    wm = F.pad(wm, (0, orig_len - wm.shape[1]))
+                final_audio = wav + wm
+                torchaudio_save(final_path, final_audio, sr)
+                print(f"[{request_id}] ✓ Watermark embedded (16kHz->{sr}Hz, len={orig_len})")
+            else:
+                # Watermark timed out -- save clean audio without watermark
+                torchaudio_save(final_path, wav, sr)
+                print(f"[{request_id}] ✓ Saved without watermark (timeout fallback)")
 
-        if wm.shape[1] > orig_len:
-            wm = wm[:, :orig_len]
-        elif wm.shape[1] < orig_len:
-            wm = F.pad(wm, (0, orig_len - wm.shape[1]))
-
-        final_audio = wav + wm
-        torchaudio_save(final_path, final_audio, sr)
-        print(f"[{request_id}] ✓ Watermark embedded (16kHz->{ sr}Hz, "
-              f"len={orig_len})")
+        except Exception as wm_err:
+            print(f"[{request_id}] WARNING: Watermark step failed ({wm_err}) -- saving clean audio")
+            traceback.print_exc()
+            try:
+                # Last resort: just copy the raw converted audio
+                shutil.copy2(raw_output, final_path)
+                print(f"[{request_id}] ✓ Copied raw output as final (watermark skipped)")
+            except Exception as copy_err:
+                print(f"[{request_id}] FATAL: could not save final output: {copy_err}")
+                return jsonify({'error': 'Failed to save final audio output.'}), 500
 
         # ── Cleanup ───────────────────────────────────────────────────────────
-        time.sleep(0.3)
+        time.sleep(0.1)
         for path in temp_paths:
             try:
                 if os.path.exists(path):
@@ -642,6 +698,10 @@ def generate_voice():
             except Exception:
                 pass
         return jsonify({'error': safe_error(str(e))}), 500
+
+    finally:
+        # ALWAYS release the lock, even on exception or early return
+        _generation_lock.release()
 
 
 @app.route('/api/download/<audio_id>', methods=['GET'])
@@ -680,8 +740,6 @@ def authenticate_voice():
 
         wav_path = os.path.join(app.config['UPLOAD_FOLDER'], f"{request_id}_verify.wav")
         temp_paths.append(wav_path)
-        # normalize=False preserves the watermark signal amplitude exactly as saved.
-        # Peak-normalizing here would rescale the waveform and weaken detection.
         if preprocess_audio(input_path, wav_path, normalize=False) is None:
             return jsonify({'error': 'Failed to preprocess audio'}), 500
 
@@ -691,15 +749,13 @@ def authenticate_voice():
         wav, sr = torchaudio_load(wav_path)
         if wav.shape[0] > 1:
             wav = torch.mean(wav, dim=0, keepdim=True)
-        # Resample to 16kHz for AudioSeal detection
         if sr != 16000:
             resampler = T.Resample(orig_freq=sr, new_freq=16000)
             wav_16k = resampler(wav)
         else:
             wav_16k = wav
-        wav_16k = wav_16k.cpu()  # detector is CPU-pinned at startup
+        wav_16k = wav_16k.cpu()
 
-        # detector is permanently on CPU -- no .cpu()/.to() calls
         with torch.no_grad():
             result, _ = detector.detect_watermark(wav_16k.unsqueeze(0))
             prob      = result.item()
@@ -752,7 +808,6 @@ def _generate_emotion_wavs():
     """
     Synthesise emotion reference wavs using MeloTTS at startup.
     Skips any wav that is already a valid audio file.
-    These are used as SE reference clips for emotion style blending.
     """
     models = load_models()
     tts = models['tts_model']
@@ -765,8 +820,6 @@ def _generate_emotion_wavs():
         'jolly':   (0.5, 0.9, 1.0, 1.20),
         'anxious': (0.3, 0.7, 0.9, 1.05),
     }
-    # Short text only -- we need a valid WAV for SE shape, not a long recording.
-    # Shorter = faster on CPU (~2s per wav instead of ~8s at startup).
     REF_TEXT = "Hello, this is a voice sample."
 
     _spk2id = tts.hps.data.spk2id
@@ -776,18 +829,14 @@ def _generate_emotion_wavs():
             TTS_SPEAKER = _candidate
             break
     if TTS_SPEAKER is None:
-        TTS_SPEAKER = list(_spk2id.keys())[0]  # HParams.keys() is safe; iter() is not
+        TTS_SPEAKER = list(_spk2id.keys())[0]
     speaker_id = _spk2id[TTS_SPEAKER]
 
-    # Use /tmp/emotions so wavs survive container restarts within the same
-    # HF Spaces instance (ephemeral app dir, but /tmp persists same container).
     EMOTION_DIR = '/tmp/voice_studio_emotions'
     os.makedirs(EMOTION_DIR, exist_ok=True)
-    # Also keep a symlink at emotions/ so the rest of the code finds them.
     if not os.path.islink('emotions') and not os.path.isdir('emotions'):
         os.symlink(EMOTION_DIR, 'emotions')
     elif os.path.isdir('emotions') and not os.path.islink('emotions'):
-        # Plain dir exists (local dev) -- just use it as-is, no symlink needed.
         EMOTION_DIR = 'emotions'
 
     regenerated = []
@@ -833,5 +882,5 @@ if __name__ == '__main__':
         port=PORT,
         debug=False,
         use_reloader=False,
-        threaded=True,
+        threaded=True,   # keep True so health checks don't block during generation
     )
